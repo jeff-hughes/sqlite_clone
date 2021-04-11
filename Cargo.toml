@@ -1,0 +1,9 @@
+[package]
+name = "sqlite_clone"
+version = "0.1.0"
+authors = ["Jeff Hughes <jeff.hughes@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
