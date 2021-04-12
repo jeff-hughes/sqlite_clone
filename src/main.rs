@@ -1,9 +1,7 @@
-use eyre::{eyre, Result};
 use std::io::{stdin, stdout, Write};
-use std::process::exit;
 
-mod statement;
-use crate::statement::{execute_statement, prepare_statement};
+use sqlite_clone::do_meta_command;
+use sqlite_clone::statement::{execute_statement, prepare_statement};
 
 fn main() {
     loop {
@@ -34,12 +32,4 @@ fn main() {
 fn print_prompt() {
     print!("db > ");
     stdout().flush().unwrap();
-}
-
-fn do_meta_command(input: String) -> Result<()> {
-    if input == ".exit" {
-        exit(0);
-    } else {
-        return Err(eyre!("Unrecognized command {}.", input));
-    }
 }
