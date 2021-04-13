@@ -1,9 +1,11 @@
 use std::io::{stdin, stdout, Write};
 
 use sqlite_clone::do_meta_command;
-use sqlite_clone::statement::{execute_statement, prepare_statement};
+use sqlite_clone::statement::Statement;
+use sqlite_clone::table::Table;
 
 fn main() {
+    let mut table = Table::new();
     loop {
         let mut input_buffer = String::new();
         print_prompt();
@@ -18,10 +20,10 @@ fn main() {
                 println!("{}", err);
             }
         } else {
-            match prepare_statement(trimmed_input) {
+            match Statement::prepare(&mut table, trimmed_input) {
                 Err(err) => println!("{}", err),
-                Ok(stmt) => {
-                    let _ = execute_statement(stmt);
+                Ok(mut stmt) => {
+                    let _ = stmt.execute();
                     println!("Executed.");
                 }
             }

@@ -2,6 +2,7 @@ use eyre::{eyre, Result};
 use std::process::exit;
 
 pub mod statement;
+pub mod table;
 
 pub fn do_meta_command(input: String) -> Result<()> {
     if input == ".exit" {
