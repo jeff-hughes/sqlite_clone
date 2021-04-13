@@ -1,14 +1,14 @@
 use eyre::{eyre, Result};
 
-const ID_SIZE: usize = std::mem::size_of::<u32>();
-const USERNAME_SIZE: usize = 32;
-const EMAIL_SIZE: usize = 255;
+pub const ID_SIZE: usize = std::mem::size_of::<u32>();
+pub const USERNAME_SIZE: usize = 32;
+pub const EMAIL_SIZE: usize = 255;
 const ROW_SIZE: usize = ID_SIZE + USERNAME_SIZE + EMAIL_SIZE;
 
 const PAGE_SIZE: usize = 4096;
 const TABLE_MAX_PAGES: usize = 100;
 const ROWS_PER_PAGE: usize = PAGE_SIZE / ROW_SIZE;
-const TABLE_MAX_ROWS: usize = ROWS_PER_PAGE * TABLE_MAX_PAGES;
+pub const TABLE_MAX_ROWS: usize = ROWS_PER_PAGE * TABLE_MAX_PAGES;
 
 // a bit of a hack to get around issue of
 // Option<Box<Page>> not implementing Copy
@@ -102,7 +102,7 @@ impl Table {
         return &mut page.rows[row_offset];
     }
 
-    pub fn execute_insert(&mut self, row: Row) -> Result<()> {
+    pub fn execute_insert(&mut self, row: Row) -> Result<String> {
         if self.num_rows >= TABLE_MAX_ROWS {
             return Err(eyre!("Table full."));
         }
@@ -110,16 +110,25 @@ impl Table {
         let row_slot = self.get_row_mut(&self.num_rows.clone());
         *row_slot = row;
         self.num_rows += 1;
-        return Ok(());
+        return Ok("Executed.".to_string());
     }
 
-    pub fn execute_select(&mut self) -> Result<()> {
+    pub fn execute_select(&mut self) -> Result<String> {
+        let mut output = String::new();
         for i in 0..self.num_rows {
             let row = self.get_row(&i);
-            let username = std::str::from_utf8(&row.username).unwrap();
-            let email = std::str::from_utf8(&row.email).unwrap();
-            println!("({}, {}, {})", row.id, username, email);
+            let username = std::str::from_utf8(&row.username)
+                .unwrap()
+                .trim_matches(char::from(0));
+            let email = std::str::from_utf8(&row.email)
+                .unwrap()
+                .trim_matches(char::from(0));
+            if i == 0 {
+                output = format!("({}, {}, {})", row.id, username, email);
+            } else {
+                output = format!("{}\n({}, {}, {})", output, row.id, username, email);
+            }
         }
-        return Ok(());
+        return Ok(output);
     }
 }
