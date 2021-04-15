@@ -128,15 +128,15 @@ impl LeafNode {
     }
 
     // pub fn get_cell(&self, cell_num: usize) -> &Cell {
-    //     return &self.cells[cell_num * LEAF_NODE_CELL_SIZE];
+    //     return &self.cells[cell_num];
     // }
 
     pub fn get_key(&self, cell_num: usize) -> &u32 {
-        return &self.cells[cell_num * LEAF_NODE_CELL_SIZE].key;
+        return &self.cells[cell_num].key;
     }
 
     pub fn get_value(&self, cell_num: usize) -> &Row {
-        return &self.cells[cell_num * LEAF_NODE_CELL_SIZE].value;
+        return &self.cells[cell_num].value;
     }
 
     pub fn insert(&mut self, cell_num: usize, key: u32, value: Row) -> Result<()> {
