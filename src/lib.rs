@@ -3,6 +3,7 @@ use eyre::{eyre, Result};
 
 pub mod btree;
 pub mod connection;
+pub mod pager;
 pub mod statement;
 pub mod table;
 
