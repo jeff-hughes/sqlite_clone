@@ -61,7 +61,7 @@ where
         if trimmed_input == ".exit" {
             return false;
         }
-        if let Err(err) = do_meta_command(trimmed_input) {
+        if let Err(err) = do_meta_command(conn, trimmed_input) {
             print_output(writer, &err.to_string());
         }
     } else {

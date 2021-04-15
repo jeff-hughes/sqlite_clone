@@ -83,7 +83,7 @@ impl Default for Row {
 
 #[derive(Debug)]
 pub struct Table {
-    pager: Pager,
+    pub pager: Pager,
     root_page_num: usize,
     cursor: Cursor,
 }
