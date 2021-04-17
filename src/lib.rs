@@ -8,7 +8,7 @@ use nom::{
     number::complete::{be_u16, be_u32, be_u8},
     sequence::tuple,
 };
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 
 pub type Input<'a> = &'a [u8];
 pub type NomResult<'a, O> = nom::IResult<Input<'a>, O, nom::error::VerboseError<Input<'a>>>;
@@ -160,6 +160,7 @@ pub struct BtreePage {
     pub fragmented_bytes: u8,
     pub right_pointer: Option<u32>,
     pub cell_pointers: Vec<u16>,
+    pub records: Vec<(VarInt, Record)>,
 }
 
 impl BtreePage {
@@ -173,7 +174,7 @@ impl BtreePage {
         let (i, right_pointer) = cond(page_type.is_interior(), be_u32)(i)?;
 
         let (i, cell_pointers) = count(be_u16, num_cells as usize)(i)?;
-
+        let mut records = Vec::new();
         for ptr in &cell_pointers {
             let (fi, payload_size) = VarInt::parse(&full_input[((*ptr as usize) - offset)..]);
             let (fi, row_id) = VarInt::parse(&fi[..]);
@@ -183,12 +184,8 @@ impl BtreePage {
                 file_header.reserved_space as usize,
                 payload_size.0 as usize,
             );
-            let payload = String::from_utf8_lossy(&fi[..payload_on_page]);
-
-            println!(
-                "{:x?} {:?} {:?} {:?}: {:?}",
-                ptr, payload_size, row_id, payload_on_page, payload
-            );
+            let (_, rec) = Record::parse(&fi[..payload_on_page])?;
+            records.push((row_id, rec));
         }
 
         Ok((
@@ -201,6 +198,7 @@ impl BtreePage {
                 fragmented_bytes: fragmented_bytes,
                 right_pointer: right_pointer,
                 cell_pointers: cell_pointers,
+                records: records,
             },
         ))
     }
@@ -260,6 +258,48 @@ impl PageType {
     }
 }
 
+#[derive(Debug)]
+pub struct Record {
+    col_types: Vec<DataType>,
+    values: Vec<Value>,
+}
+
+impl Record {
+    pub fn parse(i: Input) -> NomResult<Self> {
+        let full_input = i.clone();
+        let (i, header_size) = VarInt::parse(i);
+        let header_size_size = full_input.len() - i.len();
+
+        // get the rest of the header
+        let mut header = &i[..header_size.0 as usize - header_size_size];
+        let mut col_types = Vec::new();
+        while header.len() > 0 {
+            let (hd, col_type_int) = VarInt::parse(header);
+            let col_type = DataType::from_varint(col_type_int).expect("Not a valid data type.");
+            col_types.push(col_type);
+            header = hd;
+        }
+
+        let values_input = &full_input[header_size.0 as usize..];
+        let mut offset = 0;
+        let mut values = Vec::new();
+        for col in &col_types {
+            if let Some(size) = col.get_size() {
+                values.push(Value::new(col, &values_input[offset..(offset + size)]));
+                offset += size;
+            }
+        }
+
+        Ok((
+            i,
+            Self {
+                col_types: col_types,
+                values: values,
+            },
+        ))
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct VarInt(i64);
 
@@ -281,5 +321,111 @@ impl VarInt {
             }
         }
         return (&bytes[bytes_read..], Self(varint));
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum DataType {
+    Null(usize),
+    Int8(usize),
+    Int16(usize),
+    Int24(usize),
+    Int32(usize),
+    Int48(usize),
+    Int64(usize),
+    Float(usize),
+    Bool0(usize),
+    Bool1(usize),
+    Internal,
+    Blob(usize),
+    String(usize),
+}
+
+impl DataType {
+    pub fn from_varint(value: VarInt) -> Result<Self> {
+        let non_neg = value.0.try_into()?;
+        Ok(match non_neg {
+            0 => Self::Null(0),
+            1 => Self::Int8(1),
+            2 => Self::Int16(2),
+            3 => Self::Int24(3),
+            4 => Self::Int32(4),
+            5 => Self::Int48(6),
+            6 => Self::Int64(8),
+            7 => Self::Float(8),
+            8 => Self::Bool0(0),
+            9 => Self::Bool1(0),
+            10 | 11 => Self::Internal,
+            x if x % 2 == 0 => Self::Blob((x - 12) / 2),
+            x => Self::String((x - 13) / 2),
+        })
+    }
+
+    pub fn get_size(&self) -> Option<usize> {
+        match self {
+            Self::Internal => None,
+            Self::Null(s)
+            | Self::Int8(s)
+            | Self::Int16(s)
+            | Self::Int24(s)
+            | Self::Int32(s)
+            | Self::Int48(s)
+            | Self::Int64(s)
+            | Self::Float(s)
+            | Self::Bool0(s)
+            | Self::Bool1(s)
+            | Self::Blob(s)
+            | Self::String(s) => Some(*s),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Value {
+    Null,
+    Int8(i8),
+    Int16(i16),
+    Int24(i32),
+    Int32(i32),
+    Int48(i64),
+    Int64(i64),
+    Float(f64),
+    Bool(bool),
+    Internal(Vec<u8>),
+    Blob(Vec<u8>),
+    String(String),
+}
+
+impl Value {
+    pub fn new(data_type: &DataType, value: &[u8]) -> Self {
+        match data_type {
+            DataType::Null(_) => Self::Null,
+            DataType::Int8(_) => Self::Int8(i8::from_be_bytes(
+                value.try_into().expect("Slice with incorrect length"),
+            )),
+            DataType::Int16(_) => Self::Int16(i16::from_be_bytes(
+                value.try_into().expect("Slice with incorrect length"),
+            )),
+            DataType::Int24(_) => Self::Int24(i32::from_be_bytes(
+                value.try_into().expect("Slice with incorrect length"),
+            )),
+            DataType::Int32(_) => Self::Int32(i32::from_be_bytes(
+                value.try_into().expect("Slice with incorrect length"),
+            )),
+            DataType::Int48(_) => Self::Int48(i64::from_be_bytes(
+                value.try_into().expect("Slice with incorrect length"),
+            )),
+            DataType::Int64(_) => Self::Int64(i64::from_be_bytes(
+                value.try_into().expect("Slice with incorrect length"),
+            )),
+            DataType::Float(_) => Self::Float(f64::from_be_bytes(
+                value.try_into().expect("Slice with incorrect length"),
+            )),
+            DataType::Bool0(_) => Self::Bool(false),
+            DataType::Bool1(_) => Self::Bool(true),
+            DataType::Internal => Self::Internal(value.into()),
+            DataType::Blob(_) => Self::Blob(value.into()),
+            DataType::String(_) => Self::String(String::from_utf8_lossy(value).into()),
+        }
     }
 }
