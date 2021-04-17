@@ -17,7 +17,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{:?}", file_header);
 
     // TODO: get rid of clone
-    let (_, btree_header) = BtreePage::parse(i).map_err(|e| format!("{:?}", e))?;
+    let (_, btree_header) = BtreePage::parse(i, input.len() - i.len(), file_header.clone())
+        .map_err(|e| format!("{:?}", e))?;
     println!("{:?}", btree_header);
 
     Ok(())

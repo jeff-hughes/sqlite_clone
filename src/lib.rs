@@ -4,6 +4,7 @@ use nom::{
     bytes::complete::{tag, take},
     combinator::{cond, map, verify},
     error::context,
+    multi::count,
     number::complete::{be_u16, be_u32, be_u8},
     sequence::tuple,
 };
@@ -158,16 +159,37 @@ pub struct BtreePage {
     pub cell_start: u16,
     pub fragmented_bytes: u8,
     pub right_pointer: Option<u32>,
+    pub cell_pointers: Vec<u16>,
 }
 
 impl BtreePage {
-    pub fn parse(i: Input) -> NomResult<Self> {
+    pub fn parse(i: Input, offset: usize, file_header: FileHeader) -> NomResult<Self> {
+        let full_input = i.clone();
         let (i, page_type) = map(be_u8, |x| PageType::try_from(x).unwrap())(i)?;
         let (i, first_freeblock) = be_u16(i)?;
         let (i, num_cells) = be_u16(i)?;
         let (i, cell_start) = be_u16(i)?;
         let (i, fragmented_bytes) = be_u8(i)?;
         let (i, right_pointer) = cond(page_type.is_interior(), be_u32)(i)?;
+
+        let (i, cell_pointers) = count(be_u16, num_cells as usize)(i)?;
+
+        for ptr in &cell_pointers {
+            let (fi, payload_size) = VarInt::parse(&full_input[((*ptr as usize) - offset)..]);
+            let (fi, row_id) = VarInt::parse(&fi[..]);
+
+            let payload_on_page = Self::calc_payload_on_page(
+                file_header.page_size as usize,
+                file_header.reserved_space as usize,
+                payload_size.0 as usize,
+            );
+            let payload = String::from_utf8_lossy(&fi[..payload_on_page]);
+
+            println!(
+                "{:x?} {:?} {:?} {:?}: {:?}",
+                ptr, payload_size, row_id, payload_on_page, payload
+            );
+        }
 
         Ok((
             i,
@@ -178,8 +200,36 @@ impl BtreePage {
                 cell_start: cell_start,
                 fragmented_bytes: fragmented_bytes,
                 right_pointer: right_pointer,
+                cell_pointers: cell_pointers,
             },
         ))
+    }
+
+    fn calc_payload_on_page(page_size: usize, reserved_space: usize, payload_size: usize) -> usize {
+        // the logic for these calculations is documented here, near the
+        // bottom of the section:
+        // https://sqlite.org/fileformat2.html#b_tree_pages
+        // usable_space = U
+        // max_payload = X
+        // min_payload = M
+        // k = K...because I honestly don't understand what this one means
+        let usable_space = page_size - reserved_space;
+        let max_payload = usable_space - 35;
+        let min_payload = ((usable_space - 12) * 32 / 255) - 23;
+
+        let k = if payload_size < min_payload {
+            min_payload
+        } else {
+            min_payload + (payload_size - min_payload) % (usable_space - 4)
+        };
+        let payload_on_page = if payload_size <= max_payload {
+            payload_size
+        } else if k <= max_payload {
+            k
+        } else {
+            min_payload
+        };
+        return payload_on_page;
     }
 }
 
@@ -207,5 +257,29 @@ impl PageType {
             PageType::LeafTable => true,
             _ => false,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct VarInt(i64);
+
+impl VarInt {
+    // based off: https://docs.rs/sqlite_varint/0.1.2/src/sqlite_varint/lib.rs.html
+    pub fn parse(bytes: &[u8]) -> (&[u8], Self) {
+        let mut varint: i64 = 0;
+        let mut bytes_read: usize = 0;
+        for (i, byte) in bytes.iter().enumerate().take(9) {
+            bytes_read += 1;
+            if i == 8 {
+                varint = (varint << 8) | *byte as i64;
+                break;
+            } else {
+                varint = (varint << 7) | (*byte & 0b0111_1111) as i64;
+                if *byte < 0b1000_0000 {
+                    break;
+                }
+            }
+        }
+        return (&bytes[bytes_read..], Self(varint));
     }
 }
