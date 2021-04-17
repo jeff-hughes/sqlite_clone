@@ -2,7 +2,7 @@ use derive_try_from_primitive::TryFromPrimitive;
 use eyre::Result;
 use nom::{
     bytes::complete::{tag, take},
-    combinator::{map, verify},
+    combinator::{cond, map, verify},
     error::context,
     number::complete::{be_u16, be_u32, be_u8},
     sequence::tuple,
@@ -147,4 +147,65 @@ pub enum TextEncoding {
     Utf8 = 0x1,
     Utf16le = 0x2,
     Utf16be = 0x3,
+}
+
+// TODO: only properly parses table leaf pages so far
+#[derive(Debug)]
+pub struct BtreePage {
+    pub page_type: PageType,
+    pub first_freeblock: u16,
+    pub num_cells: u16,
+    pub cell_start: u16,
+    pub fragmented_bytes: u8,
+    pub right_pointer: Option<u32>,
+}
+
+impl BtreePage {
+    pub fn parse(i: Input) -> NomResult<Self> {
+        let (i, page_type) = map(be_u8, |x| PageType::try_from(x).unwrap())(i)?;
+        let (i, first_freeblock) = be_u16(i)?;
+        let (i, num_cells) = be_u16(i)?;
+        let (i, cell_start) = be_u16(i)?;
+        let (i, fragmented_bytes) = be_u8(i)?;
+        let (i, right_pointer) = cond(page_type.is_interior(), be_u32)(i)?;
+
+        Ok((
+            i,
+            Self {
+                page_type: page_type,
+                first_freeblock: first_freeblock,
+                num_cells: num_cells,
+                cell_start: cell_start,
+                fragmented_bytes: fragmented_bytes,
+                right_pointer: right_pointer,
+            },
+        ))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive)]
+#[repr(u8)]
+pub enum PageType {
+    InteriorIndex = 0x02,
+    InteriorTable = 0x05,
+    LeafIndex = 0x0a,
+    LeafTable = 0x0d,
+}
+
+impl PageType {
+    pub fn is_interior(&self) -> bool {
+        match self {
+            PageType::InteriorIndex => true,
+            PageType::InteriorTable => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_leaf(&self) -> bool {
+        match self {
+            PageType::LeafIndex => true,
+            PageType::LeafTable => true,
+            _ => false,
+        }
+    }
 }
