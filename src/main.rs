@@ -18,7 +18,7 @@ fn main() -> Result<()> {
 
     let page_size = file_header.page_size as usize;
 
-    let sqlite_schema = BtreePage::parse(&input[100..], 100, file_header.clone())?;
+    let sqlite_schema = BtreePage::parse(&input[100..], 100, &file_header)?;
     println!("{:?}", sqlite_schema);
 
     for table in sqlite_schema.records {
@@ -45,7 +45,7 @@ fn main() -> Result<()> {
                 let page_start = (page_num - 1) * page_size;
                 let page_end = page_start + page_size;
                 println!("{:?} {:x?} {:x?}", page_num, page_start, page_end);
-                let btree = BtreePage::parse(&input[page_start..page_end], 0, file_header.clone())?;
+                let btree = BtreePage::parse(&input[page_start..page_end], 0, &file_header)?;
                 println!("{:?} {:?}", table_vals[2], btree);
             }
             _ => (),

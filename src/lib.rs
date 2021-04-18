@@ -149,8 +149,7 @@ pub struct BtreePage {
 }
 
 impl BtreePage {
-    pub fn parse(i: &[u8], offset: usize, file_header: FileHeader) -> Result<Self> {
-        let full_input = i.clone();
+    pub fn parse(i: &[u8], offset: usize, file_header: &FileHeader) -> Result<Self> {
         let mut pos = parsing::Position::new();
 
         let page_type = PageType::try_from(parsing::be_u8(&i[pos.v()..pos.incr(1)])?).unwrap();
@@ -171,15 +170,18 @@ impl BtreePage {
 
         let mut records = Vec::new();
         for ptr in &cell_pointers {
-            let (fi, payload_size) = VarInt::parse(&full_input[((*ptr as usize) - offset)..]);
-            let (fi, row_id) = VarInt::parse(&fi[..]);
+            pos.set((*ptr as usize) - offset);
+            let (payload_size, b) = VarInt::parse(&i[pos.v()..pos.incr(9)]);
+            pos.decr(9 - b);
+            let (row_id, b) = VarInt::parse(&i[pos.v()..pos.incr(9)]);
+            pos.decr(9 - b);
 
             let payload_on_page = Self::calc_payload_on_page(
                 file_header.page_size as usize,
                 file_header.reserved_space as usize,
                 payload_size.0 as usize,
             );
-            let rec = Record::parse(&fi[..payload_on_page])?;
+            let rec = Record::parse(&i[pos.v()..pos.incr(payload_on_page)])?;
             records.push((row_id, rec));
         }
 
@@ -258,27 +260,31 @@ pub struct Record {
 
 impl Record {
     pub fn parse(i: &[u8]) -> Result<Self> {
-        let full_input = i.clone();
-        let (i, header_size) = VarInt::parse(i);
-        let header_size_size = full_input.len() - i.len();
+        let mut pos = parsing::Position::new();
+        let (header_size, b) = VarInt::parse(&i[pos.v()..pos.incr(9)]);
+        pos.decr(9 - b);
+        let header_size_size = header_size.0 as usize - b;
 
         // get the rest of the header
-        let mut header = &i[..header_size.0 as usize - header_size_size];
+        let header = &i[pos.v()..pos.incr(header_size_size)];
         let mut col_types = Vec::new();
-        while header.len() > 0 {
-            let (hd, col_type_int) = VarInt::parse(header);
+        let mut header_left = header.len();
+        pos.set(0);
+        while header_left > 0 {
+            let next_bytes = std::cmp::min(header_left, 9);
+            let (col_type_int, b) = VarInt::parse(&header[pos.v()..pos.incr(next_bytes)]);
+            pos.decr(next_bytes - b);
             let col_type = DataType::from_varint(col_type_int).expect("Not a valid data type.");
             col_types.push(col_type);
-            header = hd;
+            header_left -= b;
         }
 
-        let values_input = &full_input[header_size.0 as usize..];
-        let mut offset = 0;
+        let values_input = &i[header_size.0 as usize..];
         let mut values = Vec::new();
+        pos.set(0);
         for col in &col_types {
             if let Some(size) = col.get_size() {
-                values.push(Value::new(col, &values_input[offset..(offset + size)]));
-                offset += size;
+                values.push(Value::new(col, &values_input[pos.v()..pos.incr(size)]));
             }
         }
 
@@ -294,7 +300,7 @@ pub struct VarInt(i64);
 
 impl VarInt {
     // based off: https://docs.rs/sqlite_varint/0.1.2/src/sqlite_varint/lib.rs.html
-    pub fn parse(bytes: &[u8]) -> (&[u8], Self) {
+    pub fn parse(bytes: &[u8]) -> (Self, usize) {
         let mut varint: i64 = 0;
         let mut bytes_read: usize = 0;
         for (i, byte) in bytes.iter().enumerate().take(9) {
@@ -309,7 +315,7 @@ impl VarInt {
                 }
             }
         }
-        return (&bytes[bytes_read..], Self(varint));
+        return (Self(varint), bytes_read);
     }
 }
 

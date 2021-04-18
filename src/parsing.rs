@@ -32,13 +32,13 @@ impl Position {
         return self.pos;
     }
 
-    // pub fn decr(&mut self, value: usize) -> usize {
-    //     self.pos -= value;
-    //     return self.pos;
-    // }
+    pub fn decr(&mut self, value: usize) -> usize {
+        self.pos -= value;
+        return self.pos;
+    }
 
-    // pub fn set(&mut self, value: usize) -> usize {
-    //     self.pos = value;
-    //     return self.pos;
-    // }
+    pub fn set(&mut self, value: usize) -> usize {
+        self.pos = value;
+        return self.pos;
+    }
 }
