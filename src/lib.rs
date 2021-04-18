@@ -1,17 +1,8 @@
 use derive_try_from_primitive::TryFromPrimitive;
-use eyre::Result;
-use nom::{
-    bytes::complete::{tag, take},
-    combinator::{cond, map, verify},
-    error::context,
-    multi::count,
-    number::complete::{be_u16, be_u32, be_u8},
-    sequence::tuple,
-};
+use eyre::{eyre, Result};
 use std::convert::{TryFrom, TryInto};
 
-pub type Input<'a> = &'a [u8];
-pub type NomResult<'a, O> = nom::IResult<Input<'a>, O, nom::error::VerboseError<Input<'a>>>;
+mod parsing;
 
 #[derive(Debug, Copy, Clone)]
 pub struct FileHeader {
@@ -41,52 +32,49 @@ pub struct FileHeader {
 impl FileHeader {
     const MAGIC: &'static [u8] = "SQLite format 3\0".as_bytes();
 
-    pub fn parse(i: Input) -> NomResult<Self> {
+    pub fn parse(i: &[u8]) -> Result<Self> {
         let total_size = i.len();
-        let (i, _) = context("Magic", tag(Self::MAGIC))(i)?;
+        let mut pos = parsing::Position::new();
+
+        if &i[pos.v()..pos.incr(Self::MAGIC.len())] != Self::MAGIC {
+            return Err(eyre!("Not a valid sqlite file -- no magic number!"));
+        }
 
         // page size must be a power of two between 512 and 32768
         // inclusive, or the value 1 representing a page size of 65536
-        let (i, page_size) = verify(be_u16, |&x| {
-            x == 1 || (x >= 512 && x <= 32768 && x % 2 == 0)
-        })(i)?;
-        let (i, (file_write, file_read)) = tuple((
-            context(
-                "File write version",
-                map(be_u8, |x| FileVersion::try_from(x).unwrap()),
-            ),
-            context(
-                "File read version",
-                map(be_u8, |x| FileVersion::try_from(x).unwrap()),
-            ),
-        ))(i)?;
-        let (i, reserved_space) = be_u8(i)?;
-        let (i, (max_payload, min_payload, leaf_payload)) = tuple((
-            context(
-                "Maximum embedded payload fraction",
-                verify(be_u8, |&x| x == 64),
-            ),
-            context(
-                "Minimum embedded payload fraction",
-                verify(be_u8, |&x| x == 32),
-            ),
-            context("Leaf payload fraction", verify(be_u8, |&x| x == 32)),
-        ))(i)?;
-        let (i, change_counter) = be_u32(i)?;
-        let (i, mut num_pages) = be_u32(i)?;
-        let (i, first_freelist) = be_u32(i)?;
-        let (i, num_freelist) = be_u32(i)?;
-        let (i, schema_cookie) = be_u32(i)?;
-        let (i, schema_format) = be_u32(i)?;
-        let (i, cache_size) = be_u32(i)?;
-        let (i, largest_root_page) = be_u32(i)?;
-        let (i, encoding) = map(be_u32, |x| TextEncoding::try_from(x).unwrap())(i)?;
-        let (i, user_version) = be_u32(i)?;
-        let (i, incremental_vacuum) = map(be_u32, |x| x != 0)(i)?;
-        let (i, app_id) = be_u32(i)?;
-        let (i, _) = take(20u8)(i)?;
-        let (i, version_valid_for) = be_u32(i)?;
-        let (i, sqlite_version) = be_u32(i)?;
+        let page_size = parsing::be_u16(&i[pos.v()..pos.incr(2)])?;
+        if page_size != 1 && (page_size <= 512 || page_size >= 32768 || page_size % 2 != 0) {
+            return Err(eyre!("Page size is invalid."));
+        }
+
+        let file_write = FileVersion::try_from(parsing::be_u8(&i[pos.v()..pos.incr(1)])?).unwrap();
+        let file_read = FileVersion::try_from(parsing::be_u8(&i[pos.v()..pos.incr(1)])?).unwrap();
+
+        let reserved_space = parsing::be_u8(&i[pos.v()..pos.incr(1)])?;
+        let max_payload = parsing::be_u8(&i[pos.v()..pos.incr(1)])?;
+        let min_payload = parsing::be_u8(&i[pos.v()..pos.incr(1)])?;
+        let leaf_payload = parsing::be_u8(&i[pos.v()..pos.incr(1)])?;
+        if max_payload != 64 || min_payload != 32 || leaf_payload != 32 {
+            return Err(eyre!("Invalid payload fraction sizes"));
+        }
+
+        let change_counter = parsing::be_u32(&i[pos.v()..pos.incr(4)])?;
+        let mut num_pages = parsing::be_u32(&i[pos.v()..pos.incr(4)])?;
+        let first_freelist = parsing::be_u32(&i[pos.v()..pos.incr(4)])?;
+        let num_freelist = parsing::be_u32(&i[pos.v()..pos.incr(4)])?;
+        let schema_cookie = parsing::be_u32(&i[pos.v()..pos.incr(4)])?;
+        let schema_format = parsing::be_u32(&i[pos.v()..pos.incr(4)])?;
+        let cache_size = parsing::be_u32(&i[pos.v()..pos.incr(4)])?;
+        let largest_root_page = parsing::be_u32(&i[pos.v()..pos.incr(4)])?;
+        let encoding = TextEncoding::try_from(parsing::be_u32(&i[pos.v()..pos.incr(4)])?).unwrap();
+        let user_version = parsing::be_u32(&i[pos.v()..pos.incr(4)])?;
+        let incremental_vacuum = parsing::be_u32(&i[pos.v()..pos.incr(4)])? != 0;
+        let app_id = parsing::be_u32(&i[pos.v()..pos.incr(4)])?;
+
+        pos.incr(20); // unused space
+
+        let version_valid_for = parsing::be_u32(&i[pos.v()..pos.incr(4)])?;
+        let sqlite_version = parsing::be_u32(&i[pos.v()..pos.incr(4)])?;
 
         // The in-header database size (num_pages) is only considered to
         // be valid if it is non-zero and if the 4-byte change counter
@@ -106,32 +94,29 @@ impl FileHeader {
             num_pages = total_size as u32 / page_size as u32;
         }
 
-        Ok((
-            i,
-            Self {
-                page_size: page_size,
-                file_write_version: file_write,
-                file_read_version: file_read,
-                reserved_space: reserved_space,
-                max_payload: max_payload,
-                min_payload: min_payload,
-                leaf_payload: leaf_payload,
-                change_counter: change_counter,
-                num_pages: num_pages,
-                first_freelist: first_freelist,
-                num_freelist: num_freelist,
-                schema_cookie: schema_cookie,
-                schema_format: schema_format,
-                cache_size: cache_size,
-                largest_root_page: largest_root_page,
-                encoding: encoding,
-                user_version: user_version,
-                incremental_vacuum: incremental_vacuum,
-                app_id: app_id,
-                version_valid_for: version_valid_for,
-                sqlite_version: sqlite_version,
-            },
-        ))
+        Ok(Self {
+            page_size: page_size,
+            file_write_version: file_write,
+            file_read_version: file_read,
+            reserved_space: reserved_space,
+            max_payload: max_payload,
+            min_payload: min_payload,
+            leaf_payload: leaf_payload,
+            change_counter: change_counter,
+            num_pages: num_pages,
+            first_freelist: first_freelist,
+            num_freelist: num_freelist,
+            schema_cookie: schema_cookie,
+            schema_format: schema_format,
+            cache_size: cache_size,
+            largest_root_page: largest_root_page,
+            encoding: encoding,
+            user_version: user_version,
+            incremental_vacuum: incremental_vacuum,
+            app_id: app_id,
+            version_valid_for: version_valid_for,
+            sqlite_version: sqlite_version,
+        })
     }
 }
 
@@ -164,17 +149,26 @@ pub struct BtreePage {
 }
 
 impl BtreePage {
-    pub fn parse(i: Input, offset: usize, file_header: FileHeader) -> NomResult<Self> {
+    pub fn parse(i: &[u8], offset: usize, file_header: FileHeader) -> Result<Self> {
         let full_input = i.clone();
-        let (i, page_type) = map(be_u8, |x| PageType::try_from(x).unwrap())(i)?;
-        let (i, first_freeblock) = be_u16(i)?;
-        let (i, num_cells) = be_u16(i)?;
-        let (i, cell_start) = be_u16(i)?;
-        let (i, fragmented_bytes) = be_u8(i)?;
-        let (i, right_pointer) = cond(page_type.is_interior(), be_u32)(i)?;
-        //println!("{:?} {:?}", page_type, num_cells);
+        let mut pos = parsing::Position::new();
 
-        let (i, cell_pointers) = count(be_u16, num_cells as usize)(i)?;
+        let page_type = PageType::try_from(parsing::be_u8(&i[pos.v()..pos.incr(1)])?).unwrap();
+        let first_freeblock = parsing::be_u16(&i[pos.v()..pos.incr(2)])?;
+        let num_cells = parsing::be_u16(&i[pos.v()..pos.incr(2)])?;
+        let cell_start = parsing::be_u16(&i[pos.v()..pos.incr(2)])?;
+        let fragmented_bytes = parsing::be_u8(&i[pos.v()..pos.incr(1)])?;
+
+        let mut right_pointer = None;
+        if page_type.is_interior() {
+            right_pointer = Some(parsing::be_u32(&i[pos.v()..pos.incr(4)])?);
+        }
+
+        let mut cell_pointers = Vec::new();
+        for _ in 0..num_cells as usize {
+            cell_pointers.push(parsing::be_u16(&i[pos.v()..pos.incr(2)])?);
+        }
+
         let mut records = Vec::new();
         for ptr in &cell_pointers {
             let (fi, payload_size) = VarInt::parse(&full_input[((*ptr as usize) - offset)..]);
@@ -185,23 +179,20 @@ impl BtreePage {
                 file_header.reserved_space as usize,
                 payload_size.0 as usize,
             );
-            let (_, rec) = Record::parse(&fi[..payload_on_page])?;
+            let rec = Record::parse(&fi[..payload_on_page])?;
             records.push((row_id, rec));
         }
 
-        Ok((
-            i,
-            Self {
-                page_type: page_type,
-                first_freeblock: first_freeblock,
-                num_cells: num_cells,
-                cell_start: cell_start,
-                fragmented_bytes: fragmented_bytes,
-                right_pointer: right_pointer,
-                cell_pointers: cell_pointers,
-                records: records,
-            },
-        ))
+        Ok(Self {
+            page_type: page_type,
+            first_freeblock: first_freeblock,
+            num_cells: num_cells,
+            cell_start: cell_start,
+            fragmented_bytes: fragmented_bytes,
+            right_pointer: right_pointer,
+            cell_pointers: cell_pointers,
+            records: records,
+        })
     }
 
     fn calc_payload_on_page(page_size: usize, reserved_space: usize, payload_size: usize) -> usize {
@@ -266,7 +257,7 @@ pub struct Record {
 }
 
 impl Record {
-    pub fn parse(i: Input) -> NomResult<Self> {
+    pub fn parse(i: &[u8]) -> Result<Self> {
         let full_input = i.clone();
         let (i, header_size) = VarInt::parse(i);
         let header_size_size = full_input.len() - i.len();
@@ -291,13 +282,10 @@ impl Record {
             }
         }
 
-        Ok((
-            i,
-            Self {
-                col_types: col_types,
-                values: values,
-            },
-        ))
+        Ok(Self {
+            col_types: col_types,
+            values: values,
+        })
     }
 }
 
