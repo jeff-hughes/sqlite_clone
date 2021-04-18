@@ -39,8 +39,8 @@ impl Btree {
 #[derive(Debug)]
 pub enum BtreePage {
     TableLeaf(TableLeafPage),
-    TableInterior(TableInteriorPage),
     IndexLeaf(IndexLeafPage),
+    TableInterior(TableInteriorPage),
     IndexInterior(IndexInteriorPage),
 }
 
@@ -58,16 +58,16 @@ impl BtreePage {
                 page_header,
                 file_header,
             )?)),
-            PageType::TableInterior => Ok(Self::TableInterior(TableInteriorPage::parse(
-                i,
-                offset,
-                page_header,
-            )?)),
             PageType::IndexLeaf => Ok(Self::IndexLeaf(IndexLeafPage::parse(
                 i,
                 offset,
                 page_header,
                 file_header,
+            )?)),
+            PageType::TableInterior => Ok(Self::TableInterior(TableInteriorPage::parse(
+                i,
+                offset,
+                page_header,
             )?)),
             PageType::IndexInterior => Ok(Self::IndexInterior(IndexInteriorPage::parse(
                 i,
@@ -204,6 +204,69 @@ impl TableLeafPage {
 }
 
 #[derive(Debug)]
+pub struct IndexLeafPage {
+    pub header: PageHeader,
+    pub records: Vec<Record>,
+}
+
+impl IndexLeafPage {
+    pub fn parse(
+        i: &[u8],
+        offset: usize,
+        page_header: PageHeader,
+        file_header: &FileHeader,
+    ) -> Result<Self> {
+        let mut pos = parsing::Position::new();
+        let mut records = Vec::new();
+        for ptr in &page_header.cell_pointers {
+            pos.set((*ptr as usize) - offset);
+            let (payload_size, b) = VarInt::parse(&i[pos.v()..pos.incr(9)]);
+            pos.decr(9 - b);
+
+            let payload_on_page = Self::calc_payload_on_page(
+                file_header.page_size as usize,
+                file_header.reserved_space as usize,
+                payload_size.0 as usize,
+            );
+            let rec = Record::parse(&i[pos.v()..pos.incr(payload_on_page)])?;
+            records.push(rec);
+        }
+
+        Ok(Self {
+            header: page_header,
+            records: records,
+        })
+    }
+
+    fn calc_payload_on_page(page_size: usize, reserved_space: usize, payload_size: usize) -> usize {
+        // the logic for these calculations is documented here, near the
+        // bottom of the section:
+        // https://sqlite.org/fileformat2.html#b_tree_pages
+        // usable_space = U
+        // max_payload = X
+        // min_payload = M
+        // k = K...because I honestly don't understand what this one means
+        let usable_space = page_size - reserved_space;
+        let max_payload = ((usable_space - 12) * 64 / 255) - 23;
+        let min_payload = ((usable_space - 12) * 32 / 255) - 23;
+
+        let k = if payload_size < min_payload {
+            min_payload
+        } else {
+            min_payload + (payload_size - min_payload) % (usable_space - 4)
+        };
+        let payload_on_page = if payload_size <= max_payload {
+            payload_size
+        } else if k <= max_payload {
+            k
+        } else {
+            min_payload
+        };
+        return payload_on_page;
+    }
+}
+
+#[derive(Debug)]
 pub struct TableInteriorPage {
     pub header: PageHeader,
     pub pointers: Vec<u32>,
@@ -232,20 +295,6 @@ impl TableInteriorPage {
             pointers: pointers,
             keys: keys,
         })
-    }
-}
-
-#[derive(Debug)]
-pub struct IndexLeafPage {}
-
-impl IndexLeafPage {
-    pub fn parse(
-        _i: &[u8],
-        _offset: usize,
-        _page_header: PageHeader,
-        _file_header: &FileHeader,
-    ) -> Result<Self> {
-        Ok(Self {})
     }
 }
 

@@ -22,10 +22,9 @@ fn main() -> Result<()> {
     let sqlite_schema = BtreePage::parse(&input[100..], 100, schema_header, &file_header)?;
     println!("{:?}", sqlite_schema);
 
-    // TODO: Just pulling first table for now
     match sqlite_schema {
         BtreePage::TableLeaf(page) => {
-            for table in page.records.into_iter().take(1) {
+            for table in page.records.into_iter().take(2) {
                 // sqlite_schema has the following layout:
                 // CREATE TABLE sqlite_schema(
                 //     type text,
@@ -37,7 +36,7 @@ fn main() -> Result<()> {
                 let table_vals = table.1.values;
 
                 match &table_vals[0] {
-                    Value::String(ttype) if ttype == "table" => {
+                    Value::String(ttype) if ttype == "table" || ttype == "index" => {
                         // rootpage should always be an i8 value for tables and
                         // indexes, and 0 or NULL for views, triggers, and
                         // virtual tables

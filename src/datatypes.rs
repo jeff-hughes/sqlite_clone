@@ -35,8 +35,8 @@ pub enum DataType {
     Int48(usize),
     Int64(usize),
     Float(usize),
-    Bool0(usize),
-    Bool1(usize),
+    Integer0(usize),
+    Integer1(usize),
     Internal,
     Blob(usize),
     String(usize),
@@ -54,8 +54,8 @@ impl DataType {
             5 => Self::Int48(6),
             6 => Self::Int64(8),
             7 => Self::Float(8),
-            8 => Self::Bool0(0),
-            9 => Self::Bool1(0),
+            8 => Self::Integer0(0),
+            9 => Self::Integer1(0),
             10 | 11 => Self::Internal,
             x if x % 2 == 0 => Self::Blob((x - 12) / 2),
             x => Self::String((x - 13) / 2),
@@ -73,8 +73,8 @@ impl DataType {
             | Self::Int48(s)
             | Self::Int64(s)
             | Self::Float(s)
-            | Self::Bool0(s)
-            | Self::Bool1(s)
+            | Self::Integer0(s)
+            | Self::Integer1(s)
             | Self::Blob(s)
             | Self::String(s) => Some(*s),
         }
@@ -91,7 +91,8 @@ pub enum Value {
     Int48(i64),
     Int64(i64),
     Float(f64),
-    Bool(bool),
+    Integer0,
+    Integer1,
     Internal(Vec<u8>),
     Blob(Vec<u8>),
     String(String),
@@ -122,8 +123,8 @@ impl Value {
             DataType::Float(_) => Self::Float(f64::from_be_bytes(
                 value.try_into().expect("Slice with incorrect length"),
             )),
-            DataType::Bool0(_) => Self::Bool(false),
-            DataType::Bool1(_) => Self::Bool(true),
+            DataType::Integer0(_) => Self::Integer0,
+            DataType::Integer1(_) => Self::Integer1,
             DataType::Internal => Self::Internal(value.into()),
             DataType::Blob(_) => Self::Blob(value.into()),
             DataType::String(_) => Self::String(String::from_utf8_lossy(value).into()),
