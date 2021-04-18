@@ -172,6 +172,7 @@ impl BtreePage {
         let (i, cell_start) = be_u16(i)?;
         let (i, fragmented_bytes) = be_u8(i)?;
         let (i, right_pointer) = cond(page_type.is_interior(), be_u32)(i)?;
+        //println!("{:?} {:?}", page_type, num_cells);
 
         let (i, cell_pointers) = count(be_u16, num_cells as usize)(i)?;
         let mut records = Vec::new();
@@ -260,8 +261,8 @@ impl PageType {
 
 #[derive(Debug)]
 pub struct Record {
-    col_types: Vec<DataType>,
-    values: Vec<Value>,
+    pub col_types: Vec<DataType>,
+    pub values: Vec<Value>,
 }
 
 impl Record {

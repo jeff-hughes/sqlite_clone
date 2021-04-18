@@ -2,7 +2,7 @@
 use std::fs;
 use std::{env, process::exit};
 
-use sqlite_clone::{BtreePage, FileHeader};
+use sqlite_clone::{BtreePage, FileHeader, Value};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
@@ -16,10 +16,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (i, file_header) = FileHeader::parse(&input[..]).map_err(|e| format!("{:?}", e))?;
     println!("{:?}", file_header);
 
-    // TODO: get rid of clone
-    let (_, btree_header) = BtreePage::parse(i, input.len() - i.len(), file_header.clone())
+    let page_size = file_header.page_size as usize;
+
+    let (_, sqlite_schema) = BtreePage::parse(i, input.len() - i.len(), file_header.clone())
         .map_err(|e| format!("{:?}", e))?;
-    println!("{:?}", btree_header);
+    println!("{:?}", sqlite_schema);
+
+    for table in sqlite_schema.records {
+        // sqlite_schema has the following layout:
+        // CREATE TABLE sqlite_schema(
+        //     type text,
+        //     name text,
+        //     tbl_name text,
+        //     rootpage integer,
+        //     sql text
+        // );
+        let table_vals = table.1.values;
+
+        match &table_vals[0] {
+            Value::String(ttype) if ttype == "table" => {
+                // rootpage should always be an i8 value for tables and
+                // indexes, and 0 or NULL for views, triggers, and
+                // virtual tables
+                let page_num = match table_vals[3] {
+                    Value::Int8(val) => Ok(val as usize),
+                    _ => Err("Unexpected value"),
+                }
+                .unwrap();
+                let page_start = (page_num - 1) * page_size;
+                let page_end = page_start + page_size;
+                println!("{:?} {:x?} {:x?}", page_num, page_start, page_end);
+                let (_, btree) =
+                    BtreePage::parse(&input[page_start..page_end], 0, file_header.clone())
+                        .map_err(|e| format!("{:?}", e))?;
+                println!("{:?} {:?}", table_vals[2], btree);
+            }
+            _ => (),
+        }
+    }
 
     Ok(())
 }
