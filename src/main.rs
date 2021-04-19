@@ -24,7 +24,7 @@ fn main() -> Result<()> {
 
     match sqlite_schema {
         BtreePage::TableLeaf(page) => {
-            for table in page.records.into_iter().take(2) {
+            for table in page.records {
                 // sqlite_schema has the following layout:
                 // CREATE TABLE sqlite_schema(
                 //     type text,
