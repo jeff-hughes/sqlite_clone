@@ -131,3 +131,118 @@ impl Value {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn varint_1byte() {
+        // only first byte is important -- high order bit not set
+        let bytes = vec![0x01, 0x25, 0x37, 0xf2, 0xaa, 0x51, 0x99, 0xe3, 0x1b];
+        let varint = VarInt::parse(&bytes);
+        assert_eq!(varint.0 .0, 1);
+        assert_eq!(varint.1, 1);
+    }
+
+    #[test]
+    fn varint_2bytes() {
+        // only first two bytes are important
+        let bytes = vec![0x81, 0x25, 0x37, 0xf2, 0xaa, 0x51, 0x99, 0xe3, 0x1b];
+        let varint = VarInt::parse(&bytes);
+        assert_eq!(varint.0 .0, 0x80 + 0x25);
+        assert_eq!(varint.1, 2);
+    }
+
+    #[test]
+    fn varint_3bytes() {
+        // only first three bytes are important
+        let bytes = vec![0x81, 0xa5, 0x37, 0xf2, 0xaa, 0x51, 0x99, 0xe3, 0x1b];
+        let varint = VarInt::parse(&bytes);
+        assert_eq!(varint.0 .0, 0x4000 + 0x1280 + 0x37);
+        assert_eq!(varint.1, 3);
+    }
+
+    #[test]
+    fn varint_4bytes() {
+        // only first four bytes are important
+        let bytes = vec![0x81, 0xa5, 0x97, 0x62, 0xaa, 0x51, 0x99, 0xe3, 0x1b];
+        let varint = VarInt::parse(&bytes);
+        assert_eq!(varint.0 .0, 0x200000 + 0x94000 + 0xb80 + 0x62);
+        assert_eq!(varint.1, 4);
+    }
+
+    #[test]
+    fn varint_5bytes() {
+        // only first five bytes are important
+        let bytes = vec![0x81, 0xa5, 0x97, 0xf2, 0x3a, 0x51, 0x99, 0xe3, 0x1b];
+        let varint = VarInt::parse(&bytes);
+        assert_eq!(
+            varint.0 .0,
+            0x10000000 + 0x4a00000 + 0x5c000 + 0x3900 + 0x3a
+        );
+        assert_eq!(varint.1, 5);
+    }
+
+    #[test]
+    fn varint_6bytes() {
+        // only first six bytes are important
+        let bytes = vec![0x81, 0xa5, 0x97, 0xf2, 0xaa, 0x51, 0x99, 0xe3, 0x1b];
+        let varint = VarInt::parse(&bytes);
+        assert_eq!(
+            varint.0 .0,
+            0x800000000 + 0x250000000 + 0x2e00000 + 0x1c8000 + 0x1500 + 0x51
+        );
+        assert_eq!(varint.1, 6);
+    }
+
+    #[test]
+    fn varint_7bytes() {
+        // only first seven bytes are important
+        let bytes = vec![0x81, 0xa5, 0x97, 0xf2, 0xaa, 0x81, 0x69, 0xe3, 0x1b];
+        let varint = VarInt::parse(&bytes);
+        assert_eq!(
+            varint.0 .0,
+            0x40000000000 + 0x12800000000 + 0x170000000 + 0xe400000 + 0xa8000 + 0x80 + 0x69
+        );
+        assert_eq!(varint.1, 7);
+    }
+
+    #[test]
+    fn varint_8bytes() {
+        // only first eight bytes are important
+        let bytes = vec![0x81, 0xa5, 0x97, 0xf2, 0xaa, 0x81, 0x99, 0x23, 0x1b];
+        let varint = VarInt::parse(&bytes);
+        assert_eq!(
+            varint.0 .0,
+            0x2000000000000
+                + 0x940000000000
+                + 0xb800000000
+                + 0x720000000
+                + 0x5400000
+                + 0x4000
+                + 0xc80
+                + 0x23
+        );
+        assert_eq!(varint.1, 8);
+    }
+
+    #[test]
+    fn varint_9bytes() {
+        let bytes = vec![0x81, 0xa5, 0x97, 0xf2, 0xaa, 0x81, 0x99, 0x83, 0x1b];
+        let varint = VarInt::parse(&bytes);
+        assert_eq!(
+            varint.0 .0,
+            0x200000000000000
+                + 0x94000000000000
+                + 0xb80000000000
+                + 0x72000000000
+                + 0x540000000
+                + 0x400000
+                + 0xc8000
+                + 0x300
+                + 0x1b
+        );
+        assert_eq!(varint.1, 9);
+    }
+}
