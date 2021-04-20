@@ -62,22 +62,14 @@ impl<'a> Btree<'a> {
     //     });
     // }
 
-    pub fn parse_page(&self, page_num: usize) -> Result<BtreePage> {
-        let offset = if page_num == 1 { 100 } else { 0 };
-
+    pub fn get_page(&self, page_num: usize) -> Result<BtreePage> {
         let mut pager = self.pager.borrow_mut();
-        let page = pager.get_page(page_num);
-        let header = PageHeader::parse(&page[offset..])?;
-        return BtreePage::parse(
-            &page[..],
-            header,
-            self.db_options.page_size,
-            self.db_options.reserved_space,
-        );
+        let page = pager.get_page(page_num)?;
+        return Ok((*page).clone()); // TODO: get rid of clone
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BtreePage {
     TableLeaf(TableLeafPage),
     IndexLeaf(IndexLeafPage),
@@ -86,32 +78,38 @@ pub enum BtreePage {
 }
 
 impl BtreePage {
-    pub fn parse(
-        i: &[u8],
-        page_header: PageHeader,
-        page_size: usize,
-        reserved_space: u8,
-    ) -> Result<Self> {
-        match page_header.page_type {
+    pub fn new(page_type: PageType, page_size: usize, reserved_space: usize) -> Self {
+        let page_header = PageHeader::new(page_type, page_size, reserved_space);
+        return match page_type {
+            PageType::TableLeaf => Self::TableLeaf(TableLeafPage::new(page_header)),
+            PageType::IndexLeaf => Self::IndexLeaf(IndexLeafPage::new(page_header)),
+            PageType::TableInterior => Self::TableInterior(TableInteriorPage::new(page_header)),
+            PageType::IndexInterior => Self::IndexInterior(IndexInteriorPage::new(page_header)),
+        };
+    }
+
+    pub fn parse(i: &[u8], page_num: usize, page_size: usize, reserved_space: u8) -> Result<Self> {
+        let offset = if page_num == 0 { 100 } else { 0 };
+        let header = PageHeader::parse(&i[offset..])?;
+        match header.page_type {
             PageType::TableLeaf => Ok(Self::TableLeaf(TableLeafPage::parse(
                 i,
-                page_header,
+                header,
                 page_size,
                 reserved_space,
             )?)),
             PageType::IndexLeaf => Ok(Self::IndexLeaf(IndexLeafPage::parse(
                 i,
-                page_header,
+                header,
                 page_size,
                 reserved_space,
             )?)),
-            PageType::TableInterior => Ok(Self::TableInterior(TableInteriorPage::parse(
-                i,
-                page_header,
-            )?)),
+            PageType::TableInterior => {
+                Ok(Self::TableInterior(TableInteriorPage::parse(i, header)?))
+            }
             PageType::IndexInterior => Ok(Self::IndexInterior(IndexInteriorPage::parse(
                 i,
-                page_header,
+                header,
                 page_size,
                 reserved_space,
             )?)),
@@ -135,7 +133,7 @@ impl BtreePage {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PageHeader {
     pub page_type: PageType,
     pub first_freeblock: u16,
@@ -147,6 +145,23 @@ pub struct PageHeader {
 }
 
 impl PageHeader {
+    pub fn new(page_type: PageType, page_size: usize, reserved_space: usize) -> Self {
+        let cell_start = if (page_size - reserved_space) > u16::MAX as usize {
+            0
+        } else {
+            (page_size - reserved_space) as u16
+        };
+        return Self {
+            page_type: page_type,
+            first_freeblock: 0,
+            num_cells: 0,
+            cell_start: cell_start,
+            fragmented_bytes: 0,
+            right_pointer: None,
+            cell_pointers: Vec::new(),
+        };
+    }
+
     pub fn parse(i: &[u8]) -> Result<Self> {
         let mut pos = parsing::Position::new();
 
@@ -178,13 +193,20 @@ impl PageHeader {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TableLeafPage {
     pub header: PageHeader,
     pub records: Vec<(VarInt, Record)>,
 }
 
 impl TableLeafPage {
+    pub fn new(header: PageHeader) -> Self {
+        return Self {
+            header: header,
+            records: Vec::new(),
+        };
+    }
+
     pub fn parse(
         i: &[u8],
         page_header: PageHeader,
@@ -217,13 +239,20 @@ impl TableLeafPage {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct IndexLeafPage {
     pub header: PageHeader,
     pub records: Vec<Record>,
 }
 
 impl IndexLeafPage {
+    pub fn new(header: PageHeader) -> Self {
+        return Self {
+            header: header,
+            records: Vec::new(),
+        };
+    }
+
     pub fn parse(
         i: &[u8],
         page_header: PageHeader,
@@ -254,7 +283,7 @@ impl IndexLeafPage {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TableInteriorPage {
     pub header: PageHeader,
     pub pointers: Vec<u32>,
@@ -262,6 +291,14 @@ pub struct TableInteriorPage {
 }
 
 impl TableInteriorPage {
+    pub fn new(header: PageHeader) -> Self {
+        return Self {
+            header: header,
+            pointers: Vec::new(),
+            keys: Vec::new(),
+        };
+    }
+
     pub fn parse(i: &[u8], page_header: PageHeader) -> Result<Self> {
         let mut pos = parsing::Position::new();
         let mut pointers = Vec::new();
@@ -286,7 +323,7 @@ impl TableInteriorPage {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct IndexInteriorPage {
     pub header: PageHeader,
     pub pointers: Vec<u32>,
@@ -294,6 +331,14 @@ pub struct IndexInteriorPage {
 }
 
 impl IndexInteriorPage {
+    pub fn new(header: PageHeader) -> Self {
+        return Self {
+            header: header,
+            pointers: Vec::new(),
+            records: Vec::new(),
+        };
+    }
+
     pub fn parse(
         i: &[u8],
         page_header: PageHeader,
@@ -355,7 +400,7 @@ impl PageType {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Record {
     pub col_types: Vec<DataType>,
     pub values: Vec<Value>,

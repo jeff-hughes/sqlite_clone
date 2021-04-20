@@ -27,7 +27,7 @@ fn main() -> Result<()> {
         &db_options,
         pager.clone(),
     );
-    let sqlite_schema = schema.parse_page(1)?;
+    let sqlite_schema = schema.get_page(1)?;
     println!("{:?}", sqlite_schema);
 
     match sqlite_schema {
@@ -65,7 +65,7 @@ fn main() -> Result<()> {
                         .unwrap();
                         let btree =
                             Btree::new(name, table_name, root_page, &db_options, pager.clone());
-                        let page = btree.parse_page(root_page)?;
+                        let page = btree.get_page(root_page)?;
                         println!("{:?} {:?}", btree.name, page);
                     }
                     _ => (),

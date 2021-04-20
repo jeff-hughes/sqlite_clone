@@ -91,9 +91,12 @@ impl DbOptions {
 
         // page size must be a power of two between 512 and 32768
         // inclusive, or the value 1 representing a page size of 65536
-        let page_size = parsing::be_u16(&i[pos.v()..pos.incr(2)])?;
+        let mut page_size = parsing::be_u16(&i[pos.v()..pos.incr(2)])? as usize;
         if page_size != 1 && (page_size <= 512 || page_size >= 32768 || page_size % 2 != 0) {
             return Err(eyre!("Page size is invalid."));
+        } else if page_size == 1 {
+            page_size = 65536; // this value does not fit into a u16 and
+                               // is thus represented by 0x00 0x01
         }
 
         let file_write = FileVersion::try_from(parsing::be_u8(&i[pos.v()..pos.incr(1)])?).unwrap();
@@ -144,7 +147,7 @@ impl DbOptions {
         }
 
         Ok(Self {
-            page_size: page_size as usize,
+            page_size: page_size,
             file_write_version: file_write,
             file_read_version: file_read,
             reserved_space: reserved_space,

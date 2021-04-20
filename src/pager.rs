@@ -1,17 +1,16 @@
 use eyre::{eyre, Context, Result};
 use lru::LruCache;
-use positioned_io::{ReadAt, WriteAt};
+use positioned_io::ReadAt;
 use std::fs::{File, OpenOptions};
 
+use crate::btree::BtreePage;
 use crate::DbOptions;
-
-pub type Page = Vec<u8>;
 
 #[derive(Debug)]
 pub struct Pager {
     file_descriptor: File,
     file_length: usize,
-    cache: LruCache<usize, Page>,
+    cache: LruCache<usize, BtreePage>,
     num_pages: usize,
     page_size: usize,
     reserved_space: u8,
@@ -46,7 +45,7 @@ impl Pager {
         });
     }
 
-    fn read_from_file(&self, page_num: usize) -> Result<Page> {
+    fn read_from_file(&self, page_num: usize) -> Result<Vec<u8>> {
         if page_num < self.num_pages {
             let mut page = vec![0; self.page_size];
             let _ = self
@@ -58,45 +57,52 @@ impl Pager {
         }
     }
 
-    pub fn get_page(&mut self, page_num: usize) -> &Page {
+    pub fn get_page(&mut self, page_num: usize) -> Result<&BtreePage> {
         let page_num = page_num - 1; // SQLite pages start at 1
-        if self.cache.peek(&page_num).is_none() {
-            if page_num >= self.num_pages {
-                // page does not exist yet; allocate
-                // new one
-                let page = Page::with_capacity(self.page_size);
-                self.cache.put(page_num, page);
-                self.num_pages += 1;
-            } else {
-                // cache miss; allocate memory and load
-                // from file
-                let page = self
-                    .read_from_file(page_num)
-                    .expect("Error reading page from file");
-                self.cache.put(page_num, page);
-            }
+        if page_num >= self.num_pages {
+            return Err(eyre!("Trying to access page that does not exist."));
         }
-        return self.cache.get(&page_num).unwrap();
+        if self.cache.peek(&page_num).is_none() {
+            // if page_num >= self.num_pages {
+            //     // page does not exist yet; allocate
+            //     // new one
+            //     let page = Page::with_capacity(self.page_size);
+            //     self.cache.put(page_num, page);
+            //     self.num_pages += 1;
+            // } else {
+            // cache miss; allocate memory and load
+            // from file
+            let page = self.read_from_file(page_num)?;
+            let parsed_page =
+                BtreePage::parse(&page, page_num, self.page_size, self.reserved_space)?;
+            self.cache.put(page_num, parsed_page);
+            // }
+        }
+        return Ok(self.cache.get(&page_num).unwrap());
     }
 
-    pub fn get_page_mut(&mut self, page_num: usize) -> &mut Page {
-        if self.cache.peek(&page_num).is_none() {
-            if page_num >= self.num_pages {
-                // page does not exist yet; allocate
-                // new one
-                let page = Page::with_capacity(self.page_size);
-                self.cache.put(page_num, page);
-                self.num_pages += 1;
-            } else {
-                // cache miss; allocate memory and load
-                // from file
-                let page = self
-                    .read_from_file(page_num)
-                    .expect("Error reading page from file");
-                self.cache.put(page_num, page);
-            }
+    pub fn get_page_mut(&mut self, page_num: usize) -> Result<&mut BtreePage> {
+        let page_num = page_num - 1; // SQLite pages start at 1
+        if page_num >= self.num_pages {
+            return Err(eyre!("Trying to access page that does not exist."));
         }
-        return self.cache.get_mut(&page_num).unwrap();
+        if self.cache.peek(&page_num).is_none() {
+            // if page_num >= self.num_pages {
+            //     // page does not exist yet; allocate
+            //     // new one
+            //     let page = Page::with_capacity(self.page_size);
+            //     self.cache.put(page_num, page);
+            //     self.num_pages += 1;
+            // } else {
+            // cache miss; allocate memory and load
+            // from file
+            let page = self.read_from_file(page_num)?;
+            let parsed_page =
+                BtreePage::parse(&page, page_num, self.page_size, self.reserved_space)?;
+            self.cache.put(page_num, parsed_page);
+            // }
+        }
+        return Ok(self.cache.get_mut(&page_num).unwrap());
     }
 
     // pub fn insert(&mut self, page_num: usize, cell_num: usize, key: u32, row: Row) -> Result<()> {
