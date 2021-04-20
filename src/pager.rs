@@ -1,27 +1,24 @@
 use eyre::{eyre, Context, Result};
+use lru::LruCache;
 use positioned_io::{ReadAt, WriteAt};
 use std::fs::{File, OpenOptions};
 
-use crate::btree::Node;
-use crate::table::Row;
+use crate::DbOptions;
 
-pub const PAGE_SIZE: usize = 4096;
-const TABLE_MAX_PAGES: usize = 100;
-
-// a bit of a hack to get around issue of
-// Option<Box<Node>> not implementing Copy
-const PAGE_INIT: Option<Box<Node>> = None;
+pub type Page = Vec<u8>;
 
 #[derive(Debug)]
 pub struct Pager {
     file_descriptor: File,
     file_length: usize,
-    pages: [Option<Box<Node>>; TABLE_MAX_PAGES],
+    cache: LruCache<usize, Page>,
     num_pages: usize,
+    page_size: usize,
+    reserved_space: u8,
 }
 
 impl Pager {
-    pub fn new(filename: &str) -> Result<Self> {
+    pub fn new(filename: &str, db_options: &DbOptions) -> Result<Self> {
         let file = OpenOptions::new()
             .create(true)
             .read(true)
@@ -33,7 +30,7 @@ impl Pager {
         if file_length == 0 {
             // New database file. Initialize page 0 as leaf node.
         }
-        if file_length % PAGE_SIZE != 0 {
+        if file_length % db_options.page_size != 0 {
             return Err(eyre!(
                 "DB file is not a whole number of pages. Corrupt file."
             ));
@@ -42,50 +39,33 @@ impl Pager {
         return Ok(Self {
             file_descriptor: file,
             file_length: file_length,
-            pages: [PAGE_INIT; TABLE_MAX_PAGES],
-            num_pages: file_length / PAGE_SIZE,
+            cache: LruCache::new(10), // TODO: Change the max size later
+            num_pages: file_length / db_options.page_size,
+            page_size: db_options.page_size,
+            reserved_space: db_options.reserved_space,
         });
     }
 
-    fn read_from_file(&self, page_num: usize) -> Result<Node> {
-        // count number of pages, rounding up
-        // in case of a partial page at the end
-        // of the file
-        let num_pages = self.file_length / PAGE_SIZE + (self.file_length % PAGE_SIZE != 0) as usize;
-
-        if page_num < num_pages {
-            let mut buf = vec![0; PAGE_SIZE];
-            let bytes_read = self
+    fn read_from_file(&self, page_num: usize) -> Result<Page> {
+        if page_num < self.num_pages {
+            let mut page = vec![0; self.page_size];
+            let _ = self
                 .file_descriptor
-                .read_at((page_num * PAGE_SIZE) as u64, &mut buf);
-            match bytes_read {
-                Err(_) => Err(eyre!("Error reading page from file.")),
-                Ok(_) => return Ok(Node::deserialize(&buf)),
-            }
+                .read_at((page_num * self.page_size) as u64, &mut page)?;
+            return Ok(page);
         } else {
             return Err(eyre!("Tried to access non-existent page."));
         }
     }
 
-    pub fn get_page(&mut self, page_num: usize) -> Option<&Box<Node>> {
-        if page_num >= TABLE_MAX_PAGES {
-            return None;
-        }
-
-        if self.pages[page_num].is_none() {
+    pub fn get_page(&mut self, page_num: usize) -> &Page {
+        let page_num = page_num - 1; // SQLite pages start at 1
+        if self.cache.peek(&page_num).is_none() {
             if page_num >= self.num_pages {
                 // page does not exist yet; allocate
                 // new one
-                let mut node = Node::new(true);
-                if self.num_pages == 0 {
-                    match node {
-                        Node::Internal(_) => (),
-                        Node::Leaf(ref mut nd) => {
-                            nd.is_root = true;
-                        }
-                    }
-                }
-                self.pages[page_num] = Some(Box::new(node));
+                let page = Page::with_capacity(self.page_size);
+                self.cache.put(page_num, page);
                 self.num_pages += 1;
             } else {
                 // cache miss; allocate memory and load
@@ -93,55 +73,53 @@ impl Pager {
                 let page = self
                     .read_from_file(page_num)
                     .expect("Error reading page from file");
-                self.pages[page_num] = Some(Box::new(page));
+                self.cache.put(page_num, page);
             }
         }
-        return self.pages[page_num].as_ref();
+        return self.cache.get(&page_num).unwrap();
     }
 
-    pub fn get_page_mut(&mut self, page_num: usize) -> Option<&mut Box<Node>> {
-        if page_num >= TABLE_MAX_PAGES {
-            return None;
-        }
-
-        if self.pages[page_num].is_none() {
+    pub fn get_page_mut(&mut self, page_num: usize) -> &mut Page {
+        if self.cache.peek(&page_num).is_none() {
             if page_num >= self.num_pages {
                 // page does not exist yet; allocate
                 // new one
-                self.pages[page_num] = Some(Box::new(Node::new(true)));
+                let page = Page::with_capacity(self.page_size);
+                self.cache.put(page_num, page);
+                self.num_pages += 1;
             } else {
                 // cache miss; allocate memory and load
                 // from file
                 let page = self
                     .read_from_file(page_num)
                     .expect("Error reading page from file");
-                self.pages[page_num] = Some(Box::new(page));
+                self.cache.put(page_num, page);
             }
         }
-        return self.pages[page_num].as_mut();
+        return self.cache.get_mut(&page_num).unwrap();
     }
 
-    pub fn insert(&mut self, page_num: usize, cell_num: usize, key: u32, row: Row) -> Result<()> {
-        let node = self.get_page_mut(page_num).unwrap();
-        match node.as_mut() {
-            Node::Internal(_) => (),
-            Node::Leaf(node) => {
-                node.insert(cell_num, key, row)?;
-            }
-        }
-        return Ok(());
-    }
+    // pub fn insert(&mut self, page_num: usize, cell_num: usize, key: u32, row: Row) -> Result<()> {
+    //     let node = self.get_page_mut(page_num).unwrap();
+    //     match node.as_mut() {
+    //         Node::Internal(_) => (),
+    //         Node::Leaf(node) => {
+    //             node.insert(cell_num, key, row)?;
+    //         }
+    //     }
+    //     return Ok(());
+    // }
 }
 
-impl Drop for Pager {
-    fn drop(&mut self) {
-        for (i, page) in self.pages.iter().enumerate() {
-            if let Some(pg) = page {
-                let bytes = pg.serialize();
-                self.file_descriptor
-                    .write_all_at((i * PAGE_SIZE) as u64, &bytes)
-                    .expect("Error writing data to file.");
-            }
-        }
-    }
-}
+// impl Drop for Pager {
+//     fn drop(&mut self) {
+//         for (i, page) in self.pages.iter().enumerate() {
+//             if let Some(pg) = page {
+//                 let bytes = pg.serialize();
+//                 self.file_descriptor
+//                     .write_all_at((i * PAGE_SIZE) as u64, &bytes)
+//                     .expect("Error writing data to file.");
+//             }
+//         }
+//     }
+// }

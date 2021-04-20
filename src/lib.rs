@@ -1,14 +1,21 @@
 use derive_try_from_primitive::TryFromPrimitive;
 use eyre::{eyre, Result};
+use positioned_io::ReadAt;
 use std::convert::TryFrom;
+use std::fs::File;
 
 pub mod btree;
 pub mod datatypes;
+pub mod pager;
 pub mod parsing;
 
+const SQLITE_MAJOR_VERSION: u16 = 3;
+const SQLITE_MINOR_VERSION: u16 = 35;
+const SQLITE_PATCH_VERSION: u16 = 4;
+
 #[derive(Debug, Copy, Clone)]
-pub struct FileHeader {
-    pub page_size: u16,
+pub struct DbOptions {
+    pub page_size: usize,
     pub file_write_version: FileVersion,
     pub file_read_version: FileVersion,
     pub reserved_space: u8,
@@ -21,7 +28,7 @@ pub struct FileHeader {
     pub num_freelist: u32,
     pub schema_cookie: u32,
     pub schema_format: u32,
-    pub cache_size: u32,
+    pub cache_size: i32,
     pub largest_root_page: u32,
     pub encoding: TextEncoding,
     pub user_version: u32,
@@ -31,8 +38,48 @@ pub struct FileHeader {
     pub sqlite_version: u32,
 }
 
-impl FileHeader {
+impl DbOptions {
     const MAGIC: &'static [u8] = "SQLite format 3\0".as_bytes();
+
+    pub fn init(filename: &str) -> Result<Self> {
+        let file = File::open(filename)?;
+        let file_length = file.metadata()?.len() as usize;
+
+        if file_length > 0 {
+            // file header is 100 bytes long
+            let mut buf = vec![0; 100];
+            let _ = file.read_at(0, &mut buf)?;
+            return Self::parse(&buf);
+        } else {
+            // set defaults
+            let sqlite_version = SQLITE_MAJOR_VERSION as u32 * 1_000_000
+                + SQLITE_MINOR_VERSION as u32 * 1000
+                + SQLITE_PATCH_VERSION as u32;
+            return Ok(Self {
+                page_size: 4096,
+                file_write_version: FileVersion::Legacy,
+                file_read_version: FileVersion::Legacy,
+                reserved_space: 0,
+                max_payload: 64,
+                min_payload: 32,
+                leaf_payload: 32,
+                change_counter: 0,
+                num_pages: 0,
+                first_freelist: 0,
+                num_freelist: 0,
+                schema_cookie: 0,
+                schema_format: 4,
+                cache_size: 0,
+                largest_root_page: 0,
+                encoding: TextEncoding::Utf8,
+                user_version: 0,
+                incremental_vacuum: false,
+                app_id: 0,
+                version_valid_for: 0,
+                sqlite_version: sqlite_version,
+            });
+        }
+    }
 
     pub fn parse(i: &[u8]) -> Result<Self> {
         let total_size = i.len();
@@ -66,7 +113,7 @@ impl FileHeader {
         let num_freelist = parsing::be_u32(&i[pos.v()..pos.incr(4)])?;
         let schema_cookie = parsing::be_u32(&i[pos.v()..pos.incr(4)])?;
         let schema_format = parsing::be_u32(&i[pos.v()..pos.incr(4)])?;
-        let cache_size = parsing::be_u32(&i[pos.v()..pos.incr(4)])?;
+        let cache_size = parsing::be_i32(&i[pos.v()..pos.incr(4)])?;
         let largest_root_page = parsing::be_u32(&i[pos.v()..pos.incr(4)])?;
         let encoding = TextEncoding::try_from(parsing::be_u32(&i[pos.v()..pos.incr(4)])?).unwrap();
         let user_version = parsing::be_u32(&i[pos.v()..pos.incr(4)])?;
@@ -97,7 +144,7 @@ impl FileHeader {
         }
 
         Ok(Self {
-            page_size: page_size,
+            page_size: page_size as usize,
             file_write_version: file_write,
             file_read_version: file_read,
             reserved_space: reserved_space,

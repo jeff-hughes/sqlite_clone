@@ -1,10 +1,12 @@
 use eyre::{eyre, Result};
-use std::fs;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::{env, process::exit};
 
-use sqlite_clone::btree::{Btree, BtreePage, PageHeader};
+use sqlite_clone::btree::{Btree, BtreePage};
 use sqlite_clone::datatypes::Value;
-use sqlite_clone::FileHeader;
+use sqlite_clone::pager::Pager;
+use sqlite_clone::DbOptions;
 
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
@@ -13,13 +15,19 @@ fn main() -> Result<()> {
         exit(1);
     }
     let filename = &args[1];
-    let input = fs::read(&filename)?;
+    let db_options = DbOptions::init(&filename)?;
+    println!("{:?}", db_options);
 
-    let file_header = FileHeader::parse(&input[..])?;
-    println!("{:?}", file_header);
+    let pager = Rc::new(RefCell::new(Pager::new(&filename, &db_options)?));
 
-    let schema_header = PageHeader::parse(&input[100..])?;
-    let sqlite_schema = BtreePage::parse(&input[100..], 100, schema_header, &file_header)?;
+    let schema = Btree::new(
+        "sqlite_schema".to_string(),
+        "sqlite_schema".to_string(),
+        1,
+        &db_options,
+        pager.clone(),
+    );
+    let sqlite_schema = schema.parse_page(1)?;
     println!("{:?}", sqlite_schema);
 
     match sqlite_schema {
@@ -40,13 +48,25 @@ fn main() -> Result<()> {
                         // rootpage should always be an i8 value for tables and
                         // indexes, and 0 or NULL for views, triggers, and
                         // virtual tables
-                        let page_num = match table_vals[3] {
-                            Value::Int8(val) => Ok(val as usize),
+                        let name = match &table_vals[1] {
+                            Value::String(val) => Ok(val.clone()),
                             _ => Err("Unexpected value"),
                         }
                         .unwrap();
-                        let btree = Btree::parse(&input[..], page_num, 0, &file_header)?;
-                        println!("{:?} {:?}", table_vals[2], btree);
+                        let table_name = match &table_vals[2] {
+                            Value::String(val) => Ok(val.clone()),
+                            _ => Err("Unexpected value"),
+                        }
+                        .unwrap();
+                        let root_page = match &table_vals[3] {
+                            Value::Int8(val) => Ok(*val as usize),
+                            _ => Err("Unexpected value"),
+                        }
+                        .unwrap();
+                        let btree =
+                            Btree::new(name, table_name, root_page, &db_options, pager.clone());
+                        let page = btree.parse_page(root_page)?;
+                        println!("{:?} {:?}", btree.name, page);
                     }
                     _ => (),
                 }

@@ -1,37 +1,79 @@
 use derive_try_from_primitive::TryFromPrimitive;
 use eyre::Result;
+use std::cell::RefCell;
 use std::convert::TryFrom;
+use std::rc::Rc;
 
 use crate::datatypes::*;
+use crate::pager::Pager;
 use crate::parsing;
-use crate::FileHeader;
+use crate::DbOptions;
 
 #[derive(Debug)]
-pub struct Btree {
+pub struct Btree<'a> {
+    pub name: String,
+    pub table_name: String,
     pub root_page: usize,
-    pub pages: Vec<BtreePage>,
+    db_options: &'a DbOptions,
+    pager: Rc<RefCell<Pager>>,
 }
 
-impl Btree {
-    pub fn parse(
-        i: &[u8],
+impl<'a> Btree<'a> {
+    pub fn new(
+        name: String,
+        table_name: String,
         root_page: usize,
-        offset: usize,
-        file_header: &FileHeader,
-    ) -> Result<Self> {
-        let page_size = file_header.page_size as usize;
-        let page_start = (root_page - 1) * page_size;
-        let page_end = page_start + page_size;
-        println!("{:?} {:x?} {:x?}", root_page, page_start, page_end);
-
-        let mut pages = Vec::new();
-        let root_header = PageHeader::parse(&i[page_start..page_end])?;
-        let root = BtreePage::parse(&i[page_start..page_end], offset, root_header, file_header)?;
-        pages.push(root);
-        return Ok(Self {
+        db_options: &'a DbOptions,
+        pager: Rc<RefCell<Pager>>,
+    ) -> Self {
+        return Self {
+            name: name,
+            table_name: table_name,
             root_page: root_page,
-            pages: pages,
-        });
+            db_options: db_options,
+            pager: pager,
+        };
+    }
+
+    // pub fn parse(
+    //     i: &[u8],
+    //     root_page: usize,
+    //     offset: usize,
+    //     db_options: &DbOptions,
+    // ) -> Result<Self> {
+    //     let page_size = db_options.page_size;
+    //     let page_start = (root_page - 1) * page_size;
+    //     let page_end = page_start + page_size;
+    //     println!("{:?} {:x?} {:x?}", root_page, page_start, page_end);
+
+    //     let mut pages = Vec::new();
+    //     let root_header = PageHeader::parse(&i[page_start..page_end])?;
+    //     let root = BtreePage::parse(
+    //         &i[page_start..page_end],
+    //         offset,
+    //         root_header,
+    //         db_options.page_size,
+    //         db_options.reserved_space,
+    //     )?;
+    //     pages.push(root);
+    //     return Ok(Self {
+    //         root_page: root_page,
+    //         pages: pages,
+    //     });
+    // }
+
+    pub fn parse_page(&self, page_num: usize) -> Result<BtreePage> {
+        let offset = if page_num == 1 { 100 } else { 0 };
+
+        let mut pager = self.pager.borrow_mut();
+        let page = pager.get_page(page_num);
+        let header = PageHeader::parse(&page[offset..])?;
+        return BtreePage::parse(
+            &page[..],
+            header,
+            self.db_options.page_size,
+            self.db_options.reserved_space,
+        );
     }
 }
 
@@ -46,33 +88,32 @@ pub enum BtreePage {
 impl BtreePage {
     pub fn parse(
         i: &[u8],
-        offset: usize,
         page_header: PageHeader,
-        file_header: &FileHeader,
+        page_size: usize,
+        reserved_space: u8,
     ) -> Result<Self> {
         match page_header.page_type {
             PageType::TableLeaf => Ok(Self::TableLeaf(TableLeafPage::parse(
                 i,
-                offset,
                 page_header,
-                file_header,
+                page_size,
+                reserved_space,
             )?)),
             PageType::IndexLeaf => Ok(Self::IndexLeaf(IndexLeafPage::parse(
                 i,
-                offset,
                 page_header,
-                file_header,
+                page_size,
+                reserved_space,
             )?)),
             PageType::TableInterior => Ok(Self::TableInterior(TableInteriorPage::parse(
                 i,
-                offset,
                 page_header,
             )?)),
             PageType::IndexInterior => Ok(Self::IndexInterior(IndexInteriorPage::parse(
                 i,
-                offset,
                 page_header,
-                file_header,
+                page_size,
+                reserved_space,
             )?)),
         }
     }
@@ -146,22 +187,22 @@ pub struct TableLeafPage {
 impl TableLeafPage {
     pub fn parse(
         i: &[u8],
-        offset: usize,
         page_header: PageHeader,
-        file_header: &FileHeader,
+        page_size: usize,
+        reserved_space: u8,
     ) -> Result<Self> {
         let mut pos = parsing::Position::new();
         let mut records = Vec::new();
         for ptr in &page_header.cell_pointers {
-            pos.set((*ptr as usize) - offset);
+            pos.set(*ptr as usize);
             let (payload_size, b) = VarInt::parse(&i[pos.v()..]);
             pos.incr(b);
             let (row_id, b) = VarInt::parse(&i[pos.v()..]);
             pos.incr(b);
 
             let payload_on_page = calc_payload_on_page(
-                file_header.page_size as usize,
-                file_header.reserved_space as usize,
+                page_size as usize,
+                reserved_space as usize,
                 payload_size.0 as usize,
                 false,
             );
@@ -185,20 +226,20 @@ pub struct IndexLeafPage {
 impl IndexLeafPage {
     pub fn parse(
         i: &[u8],
-        offset: usize,
         page_header: PageHeader,
-        file_header: &FileHeader,
+        page_size: usize,
+        reserved_space: u8,
     ) -> Result<Self> {
         let mut pos = parsing::Position::new();
         let mut records = Vec::new();
         for ptr in &page_header.cell_pointers {
-            pos.set((*ptr as usize) - offset);
+            pos.set(*ptr as usize);
             let (payload_size, b) = VarInt::parse(&i[pos.v()..]);
             pos.incr(b);
 
             let payload_on_page = calc_payload_on_page(
-                file_header.page_size as usize,
-                file_header.reserved_space as usize,
+                page_size as usize,
+                reserved_space as usize,
                 payload_size.0 as usize,
                 true,
             );
@@ -221,12 +262,12 @@ pub struct TableInteriorPage {
 }
 
 impl TableInteriorPage {
-    pub fn parse(i: &[u8], offset: usize, page_header: PageHeader) -> Result<Self> {
+    pub fn parse(i: &[u8], page_header: PageHeader) -> Result<Self> {
         let mut pos = parsing::Position::new();
         let mut pointers = Vec::new();
         let mut keys = Vec::new();
         for ptr in &page_header.cell_pointers {
-            pos.set((*ptr as usize) - offset);
+            pos.set(*ptr as usize);
             let child_ptr = parsing::be_u32(&i[pos.v()..pos.incr(4)])?;
             pointers.push(child_ptr);
             let (key, b) = VarInt::parse(&i[pos.v()..]);
@@ -255,15 +296,15 @@ pub struct IndexInteriorPage {
 impl IndexInteriorPage {
     pub fn parse(
         i: &[u8],
-        offset: usize,
         page_header: PageHeader,
-        file_header: &FileHeader,
+        page_size: usize,
+        reserved_space: u8,
     ) -> Result<Self> {
         let mut pos = parsing::Position::new();
         let mut pointers = Vec::new();
         let mut records = Vec::new();
         for ptr in &page_header.cell_pointers {
-            pos.set((*ptr as usize) - offset);
+            pos.set(*ptr as usize);
             let child_ptr = parsing::be_u32(&i[pos.v()..pos.incr(4)])?;
             pointers.push(child_ptr);
 
@@ -271,8 +312,8 @@ impl IndexInteriorPage {
             pos.incr(b);
 
             let payload_on_page = calc_payload_on_page(
-                file_header.page_size as usize,
-                file_header.reserved_space as usize,
+                page_size as usize,
+                reserved_space as usize,
                 payload_size.0 as usize,
                 true,
             );

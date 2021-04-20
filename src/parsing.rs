@@ -13,6 +13,10 @@ pub fn be_u32(value: &[u8]) -> Result<u32> {
     return Ok(u32::from_be_bytes(value.try_into()?));
 }
 
+pub fn be_i32(value: &[u8]) -> Result<i32> {
+    return Ok(i32::from_be_bytes(value.try_into()?));
+}
+
 #[derive(Debug)]
 pub struct Position {
     pub pos: usize,
