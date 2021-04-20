@@ -35,34 +35,68 @@ impl<'a> Btree<'a> {
         };
     }
 
-    // pub fn parse(
-    //     i: &[u8],
-    //     root_page: usize,
-    //     offset: usize,
-    //     db_options: &DbOptions,
-    // ) -> Result<Self> {
-    //     let page_size = db_options.page_size;
-    //     let page_start = (root_page - 1) * page_size;
-    //     let page_end = page_start + page_size;
-    //     println!("{:?} {:x?} {:x?}", root_page, page_start, page_end);
+    pub fn get_row(&self, row_id: VarInt) -> Option<Record> {
+        return self.get_row_rcrs(row_id, self.root_page);
+    }
 
-    //     let mut pages = Vec::new();
-    //     let root_header = PageHeader::parse(&i[page_start..page_end])?;
-    //     let root = BtreePage::parse(
-    //         &i[page_start..page_end],
-    //         offset,
-    //         root_header,
-    //         db_options.page_size,
-    //         db_options.reserved_space,
-    //     )?;
-    //     pages.push(root);
-    //     return Ok(Self {
-    //         root_page: root_page,
-    //         pages: pages,
-    //     });
-    // }
+    fn get_row_rcrs(&self, row_id: VarInt, page_num: usize) -> Option<Record> {
+        let page = self.get_page(page_num);
+        if let Err(_) = page {
+            return None;
+        }
+        match page.unwrap() {
+            BtreePage::TableLeaf(pg) => {
+                for (row, record) in pg.records {
+                    if row == row_id {
+                        return Some(record);
+                    }
+                }
+                return None;
+            }
+            BtreePage::TableInterior(pg) => {
+                let mut child_page = None;
+                for (i, key) in pg.keys.iter().enumerate() {
+                    if row_id <= *key {
+                        child_page = Some(pg.pointers[i]);
+                        break;
+                    }
+                }
+                if child_page.is_none() {
+                    child_page = Some(*pg.pointers.last().unwrap());
+                }
+                return self.get_row_rcrs(row_id, child_page.unwrap() as usize);
+            }
+            _ => return None, // not defined for index pages
+        }
+    }
 
-    pub fn get_page(&self, page_num: usize) -> Result<BtreePage> {
+    pub fn list_records(&self) -> Vec<(VarInt, Record)> {
+        return self.list_records_rcrs(self.root_page);
+    }
+
+    fn list_records_rcrs(&self, page_num: usize) -> Vec<(VarInt, Record)> {
+        let mut output = Vec::new();
+        let page = self.get_page(page_num);
+        if let Err(_) = page {
+            return output;
+        }
+        match page.unwrap() {
+            BtreePage::TableLeaf(pg) => {
+                for row in pg.records {
+                    output.push(row);
+                }
+            }
+            BtreePage::TableInterior(pg) => {
+                for ptr in pg.pointers {
+                    output.append(&mut self.list_records_rcrs(ptr as usize));
+                }
+            }
+            _ => (), // TODO: define for index pages
+        }
+        return output;
+    }
+
+    fn get_page(&self, page_num: usize) -> Result<BtreePage> {
         let mut pager = self.pager.borrow_mut();
         let page = pager.get_page(page_num)?;
         return Ok((*page).clone()); // TODO: get rid of clone

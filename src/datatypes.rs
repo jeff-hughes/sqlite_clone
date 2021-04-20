@@ -1,10 +1,14 @@
 use eyre::Result;
 use std::convert::TryInto;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 pub struct VarInt(pub i64);
 
 impl VarInt {
+    pub fn new(value: i64) -> Self {
+        return Self(value);
+    }
+
     // based off: https://docs.rs/sqlite_varint/0.1.2/src/sqlite_varint/lib.rs.html
     pub fn parse(bytes: &[u8]) -> (Self, usize) {
         let mut varint: i64 = 0;
