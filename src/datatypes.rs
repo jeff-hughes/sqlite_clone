@@ -1,4 +1,5 @@
 use eyre::Result;
+use std::cmp::Ordering;
 use std::convert::TryInto;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
@@ -136,6 +137,295 @@ impl Value {
     }
 }
 
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        return match self {
+            Value::Null => match other {
+                Value::Null => true,
+                _ => false,
+            },
+            Value::Int8(s) => match other {
+                Value::Int8(o) => *s == *o,
+                Value::Int16(o) => *s as i16 == *o,
+                Value::Int24(o) => *s as i32 == *o,
+                Value::Int32(o) => *s as i32 == *o,
+                Value::Int48(o) => *s as i64 == *o,
+                Value::Int64(o) => *s as i64 == *o,
+                Value::Float(o) => *s as f64 == *o,
+                Value::Integer0 => *s == 0,
+                Value::Integer1 => *s == 1,
+                _ => false,
+            },
+            Value::Int16(s) => match other {
+                Value::Int8(o) => *s == *o as i16,
+                Value::Int16(o) => *s == *o,
+                Value::Int24(o) => *s as i32 == *o,
+                Value::Int32(o) => *s as i32 == *o,
+                Value::Int48(o) => *s as i64 == *o,
+                Value::Int64(o) => *s as i64 == *o,
+                Value::Float(o) => *s as f64 == *o,
+                Value::Integer0 => *s == 0,
+                Value::Integer1 => *s == 1,
+                _ => false,
+            },
+            Value::Int24(s) => match other {
+                Value::Int8(o) => *s == *o as i32,
+                Value::Int16(o) => *s == *o as i32,
+                Value::Int24(o) => *s == *o,
+                Value::Int32(o) => *s == *o,
+                Value::Int48(o) => *s as i64 == *o,
+                Value::Int64(o) => *s as i64 == *o,
+                Value::Float(o) => *s as f64 == *o,
+                Value::Integer0 => *s == 0,
+                Value::Integer1 => *s == 1,
+                _ => false,
+            },
+            Value::Int32(s) => match other {
+                Value::Int8(o) => *s == *o as i32,
+                Value::Int16(o) => *s == *o as i32,
+                Value::Int24(o) => *s == *o,
+                Value::Int32(o) => *s == *o,
+                Value::Int48(o) => *s as i64 == *o,
+                Value::Int64(o) => *s as i64 == *o,
+                Value::Float(o) => *s as f64 == *o,
+                Value::Integer0 => *s == 0,
+                Value::Integer1 => *s == 1,
+                _ => false,
+            },
+            Value::Int48(s) => match other {
+                Value::Int8(o) => *s == *o as i64,
+                Value::Int16(o) => *s == *o as i64,
+                Value::Int24(o) => *s == *o as i64,
+                Value::Int32(o) => *s == *o as i64,
+                Value::Int48(o) => *s == *o,
+                Value::Int64(o) => *s == *o,
+                Value::Float(o) => *s as f64 == *o,
+                Value::Integer0 => *s == 0,
+                Value::Integer1 => *s == 1,
+                _ => false,
+            },
+            Value::Int64(s) => match other {
+                Value::Int8(o) => *s == *o as i64,
+                Value::Int16(o) => *s == *o as i64,
+                Value::Int24(o) => *s == *o as i64,
+                Value::Int32(o) => *s == *o as i64,
+                Value::Int48(o) => *s == *o,
+                Value::Int64(o) => *s == *o,
+                Value::Float(o) => *s as f64 == *o,
+                Value::Integer0 => *s == 0,
+                Value::Integer1 => *s == 1,
+                _ => false,
+            },
+            Value::Float(s) => match other {
+                Value::Int8(o) => *s == *o as f64,
+                Value::Int16(o) => *s == *o as f64,
+                Value::Int24(o) => *s == *o as f64,
+                Value::Int32(o) => *s == *o as f64,
+                Value::Int48(o) => *s == *o as f64,
+                Value::Int64(o) => *s == *o as f64,
+                Value::Float(o) => *s == *o,
+                Value::Integer0 => *s == 0.0,
+                Value::Integer1 => *s == 1.0,
+                _ => false,
+            },
+            Value::Integer0 => match other {
+                Value::Int8(o) => *o == 0,
+                Value::Int16(o) => *o == 0,
+                Value::Int24(o) => *o == 0,
+                Value::Int32(o) => *o == 0,
+                Value::Int48(o) => *o == 0,
+                Value::Int64(o) => *o == 0,
+                Value::Float(o) => *o == 0.0,
+                Value::Integer0 => true,
+                Value::Integer1 => false,
+                _ => false,
+            },
+            Value::Integer1 => match other {
+                Value::Int8(o) => *o == 1,
+                Value::Int16(o) => *o == 1,
+                Value::Int24(o) => *o == 1,
+                Value::Int32(o) => *o == 1,
+                Value::Int48(o) => *o == 1,
+                Value::Int64(o) => *o == 1,
+                Value::Float(o) => *o == 1.0,
+                Value::Integer0 => false,
+                Value::Integer1 => true,
+                _ => false,
+            },
+            Value::Internal(s) => match other {
+                Value::Internal(o) => *s == *o,
+                _ => false,
+            },
+            Value::Blob(s) => match other {
+                Value::Blob(o) => *s == *o,
+                _ => false,
+            },
+            Value::String(s) => match other {
+                Value::String(o) => *s == *o,
+                _ => false,
+            },
+        };
+    }
+}
+
+impl PartialOrd for Value {
+    /// 1. NULL values (serial type 0) sort first.
+    /// 2. Numeric values (serial types 1 through 9) sort after NULLs
+    ///    and in numeric order.
+    /// 3. Text values (odd serial types 13 and larger) sort after
+    ///    numeric values in the order determined by the columns
+    ///    collating function.
+    /// 4. BLOB values (even serial types 12 and larger) sort last and
+    ///    in the order determined by memcmp().
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        return match self {
+            Value::Null => match other {
+                Value::Null => Some(Ordering::Equal),
+                Value::Internal(_) => None,
+                _ => Some(Ordering::Less),
+            },
+            Value::Int8(s) => match other {
+                Value::Null => Some(Ordering::Greater),
+                Value::Int8(o) => s.partial_cmp(o),
+                Value::Int16(o) => (*s as i16).partial_cmp(o),
+                Value::Int24(o) => (*s as i32).partial_cmp(o),
+                Value::Int32(o) => (*s as i32).partial_cmp(o),
+                Value::Int48(o) => (*s as i64).partial_cmp(o),
+                Value::Int64(o) => (*s as i64).partial_cmp(o),
+                Value::Float(o) => (*s as f64).partial_cmp(o),
+                Value::Integer0 => s.partial_cmp(&0),
+                Value::Integer1 => s.partial_cmp(&1),
+                Value::Internal(_) => None,
+                _ => Some(Ordering::Less),
+            },
+            Value::Int16(s) => match other {
+                Value::Null => Some(Ordering::Greater),
+                Value::Int8(o) => s.partial_cmp(&(*o as i16)),
+                Value::Int16(o) => s.partial_cmp(o),
+                Value::Int24(o) => (*s as i32).partial_cmp(o),
+                Value::Int32(o) => (*s as i32).partial_cmp(o),
+                Value::Int48(o) => (*s as i64).partial_cmp(o),
+                Value::Int64(o) => (*s as i64).partial_cmp(o),
+                Value::Float(o) => (*s as f64).partial_cmp(o),
+                Value::Integer0 => s.partial_cmp(&0),
+                Value::Integer1 => s.partial_cmp(&1),
+                Value::Internal(_) => None,
+                _ => Some(Ordering::Less),
+            },
+            Value::Int24(s) => match other {
+                Value::Null => Some(Ordering::Greater),
+                Value::Int8(o) => s.partial_cmp(&(*o as i32)),
+                Value::Int16(o) => s.partial_cmp(&(*o as i32)),
+                Value::Int24(o) => s.partial_cmp(o),
+                Value::Int32(o) => s.partial_cmp(o),
+                Value::Int48(o) => (*s as i64).partial_cmp(o),
+                Value::Int64(o) => (*s as i64).partial_cmp(o),
+                Value::Float(o) => (*s as f64).partial_cmp(o),
+                Value::Integer0 => s.partial_cmp(&0),
+                Value::Integer1 => s.partial_cmp(&1),
+                Value::Internal(_) => None,
+                _ => Some(Ordering::Less),
+            },
+            Value::Int32(s) => match other {
+                Value::Null => Some(Ordering::Greater),
+                Value::Int8(o) => s.partial_cmp(&(*o as i32)),
+                Value::Int16(o) => s.partial_cmp(&(*o as i32)),
+                Value::Int24(o) => s.partial_cmp(o),
+                Value::Int32(o) => s.partial_cmp(o),
+                Value::Int48(o) => (*s as i64).partial_cmp(o),
+                Value::Int64(o) => (*s as i64).partial_cmp(o),
+                Value::Float(o) => (*s as f64).partial_cmp(o),
+                Value::Integer0 => s.partial_cmp(&0),
+                Value::Integer1 => s.partial_cmp(&1),
+                Value::Internal(_) => None,
+                _ => Some(Ordering::Less),
+            },
+            Value::Int48(s) => match other {
+                Value::Null => Some(Ordering::Greater),
+                Value::Int8(o) => s.partial_cmp(&(*o as i64)),
+                Value::Int16(o) => s.partial_cmp(&(*o as i64)),
+                Value::Int24(o) => s.partial_cmp(&(*o as i64)),
+                Value::Int32(o) => s.partial_cmp(&(*o as i64)),
+                Value::Int48(o) => s.partial_cmp(o),
+                Value::Int64(o) => s.partial_cmp(o),
+                Value::Float(o) => (*s as f64).partial_cmp(o),
+                Value::Integer0 => s.partial_cmp(&0),
+                Value::Integer1 => s.partial_cmp(&1),
+                Value::Internal(_) => None,
+                _ => Some(Ordering::Less),
+            },
+            Value::Int64(s) => match other {
+                Value::Null => Some(Ordering::Greater),
+                Value::Int8(o) => s.partial_cmp(&(*o as i64)),
+                Value::Int16(o) => s.partial_cmp(&(*o as i64)),
+                Value::Int24(o) => s.partial_cmp(&(*o as i64)),
+                Value::Int32(o) => s.partial_cmp(&(*o as i64)),
+                Value::Int48(o) => s.partial_cmp(o),
+                Value::Int64(o) => s.partial_cmp(o),
+                Value::Float(o) => (*s as f64).partial_cmp(o),
+                Value::Integer0 => s.partial_cmp(&0),
+                Value::Integer1 => s.partial_cmp(&1),
+                Value::Internal(_) => None,
+                _ => Some(Ordering::Less),
+            },
+            Value::Float(s) => match other {
+                Value::Null => Some(Ordering::Greater),
+                Value::Int8(o) => s.partial_cmp(&(*o as f64)),
+                Value::Int16(o) => s.partial_cmp(&(*o as f64)),
+                Value::Int24(o) => s.partial_cmp(&(*o as f64)),
+                Value::Int32(o) => s.partial_cmp(&(*o as f64)),
+                Value::Int48(o) => s.partial_cmp(&(*o as f64)),
+                Value::Int64(o) => s.partial_cmp(&(*o as f64)),
+                Value::Float(o) => (*s as f64).partial_cmp(&(*o as f64)),
+                Value::Integer0 => s.partial_cmp(&0.0),
+                Value::Integer1 => s.partial_cmp(&1.0),
+                Value::Internal(_) => None,
+                _ => Some(Ordering::Less),
+            },
+            Value::Integer0 => match other {
+                Value::Null => Some(Ordering::Greater),
+                Value::Int8(o) => 0.partial_cmp(o),
+                Value::Int16(o) => 0.partial_cmp(o),
+                Value::Int24(o) => 0.partial_cmp(o),
+                Value::Int32(o) => 0.partial_cmp(o),
+                Value::Int48(o) => 0.partial_cmp(o),
+                Value::Int64(o) => 0.partial_cmp(o),
+                Value::Float(o) => 0.0.partial_cmp(o),
+                Value::Integer0 => Some(Ordering::Equal),
+                Value::Integer1 => Some(Ordering::Less),
+                Value::Internal(_) => None,
+                _ => Some(Ordering::Less),
+            },
+            Value::Integer1 => match other {
+                Value::Null => Some(Ordering::Greater),
+                Value::Int8(o) => 1.partial_cmp(o),
+                Value::Int16(o) => 1.partial_cmp(o),
+                Value::Int24(o) => 1.partial_cmp(o),
+                Value::Int32(o) => 1.partial_cmp(o),
+                Value::Int48(o) => 1.partial_cmp(o),
+                Value::Int64(o) => 1.partial_cmp(o),
+                Value::Float(o) => 1.0.partial_cmp(o),
+                Value::Integer0 => Some(Ordering::Greater),
+                Value::Integer1 => Some(Ordering::Equal),
+                Value::Internal(_) => None,
+                _ => Some(Ordering::Less),
+            },
+            Value::String(s) => match other {
+                Value::String(o) => s.partial_cmp(o),
+                Value::Blob(_) => Some(Ordering::Less),
+                Value::Internal(_) => None,
+                _ => Some(Ordering::Greater),
+            },
+            Value::Blob(s) => match other {
+                Value::Blob(o) => s.partial_cmp(o),
+                Value::Internal(_) => None,
+                _ => Some(Ordering::Greater),
+            },
+            Value::Internal(_) => None,
+        };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,5 +538,83 @@ mod tests {
                 + 0x1b
         );
         assert_eq!(varint.1, 9);
+    }
+
+    #[test]
+    fn value_order() {
+        let val_null = Value::Null;
+        let val_int8_1 = Value::Int8(1);
+        let val_int8_2 = Value::Int8(2);
+        let val_int16_1 = Value::Int16(1);
+        let val_int16_2 = Value::Int16(2);
+        let val_int24_1 = Value::Int24(1);
+        let val_int24_2 = Value::Int24(2);
+        let val_int32_1 = Value::Int32(1);
+        let val_int32_2 = Value::Int32(2);
+        let val_int48_1 = Value::Int48(1);
+        let val_int48_2 = Value::Int48(2);
+        let val_int64_1 = Value::Int64(1);
+        let val_int64_2 = Value::Int64(2);
+        let val_float_1 = Value::Float(1.0);
+        let val_float_2 = Value::Float(2.0);
+        let val_float_nan = Value::Float(f64::NAN);
+        let val_int0 = Value::Integer0;
+        let val_int1 = Value::Integer1;
+        let val_string_a = Value::String("a".to_string());
+        let val_string_b = Value::String("b".to_string());
+        let val_blob_1 = Value::Blob(vec![0x01]);
+        let val_blob_2 = Value::Blob(vec![0x02]);
+
+        // NULLs always sorted first
+        assert!(val_null < val_int8_1);
+        assert!(val_null < val_int16_1);
+        assert!(val_null < val_int16_1);
+        assert!(val_null < val_int24_1);
+        assert!(val_null < val_int32_1);
+        assert!(val_null < val_int48_1);
+        assert!(val_null < val_int64_1);
+        assert!(val_null < val_float_1);
+        assert!(val_null < val_float_nan);
+        assert!(val_null < val_int0);
+        assert!(val_null < val_int1);
+        assert!(val_null < val_string_a);
+        assert!(val_null < val_blob_1);
+
+        assert!(val_int8_1 < val_int8_2);
+        assert!(val_int8_1 == val_int16_1);
+        assert!(val_int8_1 < val_int16_2);
+        assert!(val_int8_1 == val_int24_1);
+        assert!(val_int8_1 < val_int24_2);
+        assert!(val_int8_1 == val_int32_1);
+        assert!(val_int8_1 < val_int32_2);
+        assert!(val_int8_1 == val_int48_1);
+        assert!(val_int8_1 < val_int48_2);
+        assert!(val_int8_1 == val_int64_1);
+        assert!(val_int8_1 < val_int64_2);
+        assert!(val_int8_1 == val_float_1);
+        assert!(val_int8_1 < val_float_2);
+        assert!(val_int8_1 != val_float_nan);
+        assert!(val_int8_1 > val_int0);
+        assert!(val_int8_1 == val_int1);
+        assert!(val_int8_1 < val_string_a);
+        assert!(val_int8_1 < val_blob_1);
+
+        assert!(val_int16_1 < val_int16_2);
+        assert!(val_int24_1 < val_int24_2);
+        assert!(val_int32_1 < val_int32_2);
+        assert!(val_int48_1 < val_int48_2);
+        assert!(val_int64_1 < val_int64_2);
+
+        assert!(val_float_1 < val_float_2);
+        assert!(val_float_1 != val_float_nan);
+        assert!(val_float_2 != val_float_nan);
+
+        assert!(val_int0 < val_int1);
+
+        assert!(val_string_a < val_string_b);
+        assert!(val_string_a < val_blob_1);
+        assert!(val_string_a < val_blob_2);
+
+        assert!(val_blob_1 < val_blob_2);
     }
 }

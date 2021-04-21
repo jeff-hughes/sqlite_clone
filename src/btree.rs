@@ -1,6 +1,7 @@
 use derive_try_from_primitive::TryFromPrimitive;
 use eyre::Result;
 use std::cell::RefCell;
+use std::cmp::Ordering;
 use std::convert::TryFrom;
 use std::rc::Rc;
 
@@ -399,6 +400,10 @@ impl IndexInteriorPage {
             let rec = Record::parse(&i[pos.v()..pos.incr(payload_on_page)])?;
             records.push(rec);
         }
+
+        if let Some(right_ptr) = page_header.right_pointer {
+            pointers.push(right_ptr);
+        }
         Ok(Self {
             header: page_header,
             pointers: pointers,
@@ -474,6 +479,40 @@ impl Record {
             col_types: col_types,
             values: values,
         })
+    }
+}
+
+impl PartialEq for Record {
+    fn eq(&self, other: &Self) -> bool {
+        for (i, sval) in self.values.iter().enumerate() {
+            let oval = other.values.get(i);
+            match oval {
+                Some(oval) => {
+                    if sval != oval {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
+        }
+        return true;
+    }
+}
+
+impl PartialOrd for Record {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        for (i, sval) in self.values.iter().enumerate() {
+            let oval = other.values.get(i);
+            match oval {
+                Some(oval) => {
+                    if sval != oval {
+                        return sval.partial_cmp(oval);
+                    }
+                }
+                None => return Some(Ordering::Greater),
+            }
+        }
+        return None;
     }
 }
 
