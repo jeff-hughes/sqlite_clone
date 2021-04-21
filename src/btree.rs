@@ -71,6 +71,45 @@ impl<'a> Btree<'a> {
         }
     }
 
+    pub fn get_index(&self, index: Record) -> Option<Record> {
+        return self.get_index_rcrs(index, self.root_page);
+    }
+
+    fn get_index_rcrs(&self, index: Record, page_num: usize) -> Option<Record> {
+        let page = self.get_page(page_num);
+        if let Err(_) = page {
+            return None;
+        }
+        match page.unwrap() {
+            BtreePage::IndexLeaf(pg) => {
+                for record in pg.records {
+                    if index == record {
+                        // TODO: not going to work properly because the
+                        // Record contains the row number
+                        return Some(record);
+                    }
+                }
+                return None;
+            }
+            BtreePage::IndexInterior(pg) => {
+                let mut child_page = None;
+                for (i, record) in pg.records.into_iter().enumerate() {
+                    if index == record {
+                        return Some(record);
+                    } else if index <= record {
+                        child_page = Some(pg.pointers[i]);
+                        break;
+                    }
+                }
+                if child_page.is_none() {
+                    child_page = Some(*pg.pointers.last().unwrap());
+                }
+                return self.get_index_rcrs(index, child_page.unwrap() as usize);
+            }
+            _ => return None, // not defined for table pages
+        }
+    }
+
     pub fn list_records(&self) -> Vec<(VarInt, Record)> {
         return self.list_records_rcrs(self.root_page);
     }
@@ -446,6 +485,13 @@ pub struct Record {
 }
 
 impl Record {
+    pub fn new(col_types: Vec<DataType>, values: Vec<Value>) -> Self {
+        return Self {
+            col_types: col_types,
+            values: values,
+        };
+    }
+
     pub fn parse(i: &[u8]) -> Result<Self> {
         let mut pos = parsing::Position::new();
         let (header_size, b) = VarInt::parse(&i[pos.v()..]);
@@ -483,6 +529,15 @@ impl Record {
 }
 
 impl PartialEq for Record {
+    /// Tests two Records for equality. Note that the way this is set up,
+    /// comparing Records of different lengths will not be symmetric,
+    /// i.e., a == b may not imply that b == a
+    /// In the case of comparing Records, this is a feature, not a bug,
+    /// as one of the key things we want to use this for is comparing
+    /// index values, where the index stores the row number of the
+    /// corresponding table value, but obviously we don't have that info
+    /// when searching. In this situation, always compare
+    /// search_value == index_value, so the shorter value is on the left.
     fn eq(&self, other: &Self) -> bool {
         for (i, sval) in self.values.iter().enumerate() {
             let oval = other.values.get(i);

@@ -135,6 +135,20 @@ impl Value {
             DataType::String(_) => Self::String(String::from_utf8_lossy(value).into()),
         }
     }
+
+    pub fn get_int_val(&self) -> Option<i64> {
+        return match self {
+            Self::Int8(v) => Some(*v as i64),
+            Self::Int16(v) => Some(*v as i64),
+            Self::Int24(v) => Some(*v as i64),
+            Self::Int32(v) => Some(*v as i64),
+            Self::Int48(v) => Some(*v as i64),
+            Self::Int64(v) => Some(*v as i64),
+            Self::Integer0 => Some(0),
+            Self::Integer1 => Some(1),
+            _ => None,
+        };
+    }
 }
 
 impl PartialEq for Value {

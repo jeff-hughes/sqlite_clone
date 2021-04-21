@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::{env, process::exit};
 
-use sqlite_clone::btree::Btree;
-use sqlite_clone::datatypes::{Value, VarInt};
+use sqlite_clone::btree::{Btree, Record};
+use sqlite_clone::datatypes::{DataType, Value, VarInt};
 use sqlite_clone::pager::Pager;
 use sqlite_clone::DbOptions;
 
@@ -89,10 +89,26 @@ fn main() -> Result<()> {
         println!(" - {}", key);
     }
 
-    // pull a random row, just to check things are working
-    let podcasts_table = tables.get("podcasts").unwrap();
-    let row12 = podcasts_table.get_row(VarInt::new(12));
-    println!("{:?}", row12);
+    // navigate an index
+    let podcasts_index = indexes.get("sqlite_autoindex_podcasts_1").unwrap();
+    let index_str = "https://feeds.megaphone.fm/replyall".to_string();
+
+    let index = Record::new(
+        vec![DataType::String(index_str.len())],
+        vec![Value::String(index_str)],
+    );
+    let res = podcasts_index.get_index(index);
+    println!("{:?}", res);
+
+    // pull corresponding row from table
+    if let Some(rec) = res {
+        let row_id = rec.values.last().unwrap().get_int_val();
+        if let Some(row_id) = row_id {
+            let podcasts_table = tables.get("podcasts").unwrap();
+            let row = podcasts_table.get_row(VarInt::new(row_id));
+            println!("{:?}", row);
+        }
+    }
 
     Ok(())
 }
