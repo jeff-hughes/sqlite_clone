@@ -1,7 +1,7 @@
 use derive_try_from_primitive::TryFromPrimitive;
 use eyre::{eyre, Result};
 use positioned_io::ReadAt;
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::fs::File;
 
 pub mod btree;
@@ -49,7 +49,7 @@ impl DbOptions {
             // file header is 100 bytes long
             let mut buf = vec![0; 100];
             let _ = file.read_at(0, &mut buf)?;
-            return Self::parse(&buf);
+            return Self::deserialize(&buf);
         } else {
             // set defaults
             let sqlite_version = SQLITE_MAJOR_VERSION as u32 * 1_000_000
@@ -81,7 +81,7 @@ impl DbOptions {
         }
     }
 
-    pub fn parse(i: &[u8]) -> Result<Self> {
+    pub fn deserialize(i: &[u8]) -> Result<Self> {
         let total_size = i.len();
         let mut pos = parsing::Position::new();
 
@@ -169,6 +169,48 @@ impl DbOptions {
             version_valid_for: version_valid_for,
             sqlite_version: sqlite_version,
         })
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut output = Vec::with_capacity(100);
+        output.extend_from_slice(Self::MAGIC);
+        let page_size = if self.page_size == 65536 {
+            1
+        } else {
+            self.page_size as u16
+        };
+        output.extend(page_size.to_be_bytes().iter());
+        output.push(self.file_write_version as u8);
+        output.push(self.file_read_version as u8);
+        output.push(self.reserved_space);
+
+        output.push(self.max_payload);
+        output.push(self.min_payload);
+        output.push(self.leaf_payload);
+
+        output.extend(self.change_counter.to_be_bytes().iter());
+        output.extend(self.num_pages.to_be_bytes().iter());
+        output.extend(self.first_freelist.to_be_bytes().iter());
+        output.extend(self.num_freelist.to_be_bytes().iter());
+
+        output.extend(self.schema_cookie.to_be_bytes().iter());
+        output.extend(self.schema_format.to_be_bytes().iter());
+
+        output.extend(self.cache_size.to_be_bytes().iter());
+        output.extend(self.largest_root_page.to_be_bytes().iter());
+
+        let encoding: u32 = (self.encoding as u32).try_into().unwrap();
+        output.extend(encoding.to_be_bytes().iter());
+        output.extend(self.user_version.to_be_bytes().iter());
+
+        let incr_vacuum = self.incremental_vacuum as u32;
+        output.extend(incr_vacuum.to_be_bytes().iter());
+        output.extend(self.app_id.to_be_bytes().iter());
+        output.extend(&[0u8; 20]); // unused space
+
+        output.extend(self.version_valid_for.to_be_bytes().iter());
+        output.extend(self.sqlite_version.to_be_bytes().iter());
+        return output;
     }
 }
 
