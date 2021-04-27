@@ -7,6 +7,8 @@ use crate::btree::BtreePage;
 use crate::parsing;
 use crate::DbOptions;
 
+const CACHE_SIZE: usize = 500;
+
 #[derive(Debug)]
 pub struct Pager {
     file_descriptor: File,
@@ -39,7 +41,7 @@ impl Pager {
         return Ok(Self {
             file_descriptor: file,
             file_length: file_length,
-            cache: LruCache::new(10), // TODO: Change the max size later
+            cache: LruCache::new(CACHE_SIZE),
             num_pages: file_length / db_options.page_size,
             page_size: db_options.page_size,
             reserved_space: db_options.reserved_space,
