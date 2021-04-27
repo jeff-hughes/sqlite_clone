@@ -4,6 +4,7 @@ use positioned_io::ReadAt;
 use std::fs::{File, OpenOptions};
 
 use crate::btree::BtreePage;
+use crate::parsing;
 use crate::DbOptions;
 
 #[derive(Debug)]
@@ -11,7 +12,7 @@ pub struct Pager {
     file_descriptor: File,
     file_length: usize,
     cache: LruCache<usize, BtreePage>,
-    num_pages: usize,
+    pub num_pages: usize,
     page_size: usize,
     reserved_space: u8,
 }
@@ -45,12 +46,12 @@ impl Pager {
         });
     }
 
-    fn read_from_file(&self, page_num: usize) -> Result<Vec<u8>> {
-        if page_num < self.num_pages {
+    pub fn read_from_file(&self, page_num: usize) -> Result<Vec<u8>> {
+        if page_num <= self.num_pages {
             let mut page = vec![0; self.page_size];
             let _ = self
                 .file_descriptor
-                .read_at((page_num * self.page_size) as u64, &mut page)?;
+                .read_at(((page_num - 1) * self.page_size) as u64, &mut page)?;
             return Ok(page);
         } else {
             return Err(eyre!("Tried to access non-existent page."));
@@ -58,8 +59,7 @@ impl Pager {
     }
 
     pub fn get_page(&mut self, page_num: usize) -> Result<&BtreePage> {
-        let page_num = page_num - 1; // SQLite pages start at 1
-        if page_num >= self.num_pages {
+        if page_num > self.num_pages {
             return Err(eyre!("Trying to access page that does not exist."));
         }
         if self.cache.peek(&page_num).is_none() {
@@ -74,7 +74,7 @@ impl Pager {
             // from file
             let page = self.read_from_file(page_num)?;
             let parsed_page =
-                BtreePage::parse(&page, page_num, self.page_size, self.reserved_space)?;
+                BtreePage::deserialize(&page, page_num, self.page_size, self.reserved_space)?;
             self.cache.put(page_num, parsed_page);
             // }
         }
@@ -82,8 +82,7 @@ impl Pager {
     }
 
     pub fn get_page_mut(&mut self, page_num: usize) -> Result<&mut BtreePage> {
-        let page_num = page_num - 1; // SQLite pages start at 1
-        if page_num >= self.num_pages {
+        if page_num > self.num_pages {
             return Err(eyre!("Trying to access page that does not exist."));
         }
         if self.cache.peek(&page_num).is_none() {
@@ -98,23 +97,16 @@ impl Pager {
             // from file
             let page = self.read_from_file(page_num)?;
             let parsed_page =
-                BtreePage::parse(&page, page_num, self.page_size, self.reserved_space)?;
+                BtreePage::deserialize(&page, page_num, self.page_size, self.reserved_space)?;
             self.cache.put(page_num, parsed_page);
             // }
         }
         return Ok(self.cache.get_mut(&page_num).unwrap());
     }
 
-    // pub fn insert(&mut self, page_num: usize, cell_num: usize, key: u32, row: Row) -> Result<()> {
-    //     let node = self.get_page_mut(page_num).unwrap();
-    //     match node.as_mut() {
-    //         Node::Internal(_) => (),
-    //         Node::Leaf(node) => {
-    //             node.insert(cell_num, key, row)?;
-    //         }
-    //     }
-    //     return Ok(());
-    // }
+    pub fn insert(&mut self, page_num: usize, page: BtreePage) {
+        self.cache.put(page_num, page);
+    }
 }
 
 // impl Drop for Pager {
@@ -129,3 +121,48 @@ impl Pager {
 //         }
 //     }
 // }
+
+#[derive(Debug, Clone)]
+pub struct FreelistPage {
+    pub free_pages: Vec<usize>,
+    pub next_page_link: Option<usize>,
+}
+
+impl FreelistPage {
+    pub fn deserialize(i: &[u8]) -> Result<Self> {
+        let next_page = parsing::be_u32(&i[0..4])?;
+        let next_page_link = if next_page > 0 {
+            Some(next_page as usize)
+        } else {
+            None
+        };
+        let list_size = parsing::be_u32(&i[4..8])? as usize;
+        let mut ints = Vec::new();
+        if list_size > 0 {
+            for n in 2..=(list_size + 1) {
+                let pos = n * 4;
+                ints.push(parsing::be_u32(&i[pos..pos + 4])? as usize);
+            }
+        }
+        return Ok(Self {
+            free_pages: ints,
+            next_page_link: next_page_link,
+        });
+    }
+
+    pub fn serialize(&self, page_size: usize) -> Vec<u8> {
+        let mut output = Vec::new();
+        match self.next_page_link {
+            Some(pg) => output.extend(&pg.to_be_bytes()),
+            None => output.extend(&0_u32.to_be_bytes()),
+        }
+
+        output.extend(&self.free_pages.len().to_be_bytes());
+        for i in &self.free_pages {
+            output.extend(&i.to_be_bytes());
+        }
+
+        output.extend(&vec![0x0; page_size - output.len()]);
+        return output;
+    }
+}
