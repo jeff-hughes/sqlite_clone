@@ -11,7 +11,7 @@ impl VarInt {
     }
 
     // based off: https://docs.rs/sqlite_varint/0.1.2/src/sqlite_varint/lib.rs.html
-    pub fn parse(bytes: &[u8]) -> (Self, usize) {
+    pub fn deserialize(bytes: &[u8]) -> (Self, usize) {
         let mut varint: i64 = 0;
         let mut bytes_read: usize = 0;
         for (i, byte) in bytes.iter().enumerate().take(9) {
@@ -28,6 +28,32 @@ impl VarInt {
         }
         return (Self(varint), bytes_read);
     }
+
+    // based off: https://docs.rs/sqlite_varint/0.1.2/src/sqlite_varint/lib.rs.html
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut result = std::collections::VecDeque::new();
+        let mut shifted_input = self.0;
+
+        if self.0 as u64 > 0x00ff_ffff_ffff_ffff {
+            // we first push the entire last byte
+            result.push_front((shifted_input & 0b1111_1111) as u8);
+            shifted_input >>= 8;
+        }
+        for _ in 0..8 {
+            result.push_front((shifted_input & 0b0111_1111) as u8);
+
+            shifted_input >>= 7;
+            if result.len() > 1 {
+                let p = result.front_mut().unwrap();
+                *p |= 0b1000_0000;
+            }
+            if shifted_input == 0 {
+                // we reached the last one in case we don't use all 9 bytes.
+                break;
+            }
+        }
+        return result.into_iter().collect();
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -42,7 +68,8 @@ pub enum DataType {
     Float(usize),
     Integer0(usize),
     Integer1(usize),
-    Internal,
+    Internal10,
+    Internal11,
     Blob(usize),
     String(usize),
 }
@@ -61,15 +88,35 @@ impl DataType {
             7 => Self::Float(8),
             8 => Self::Integer0(0),
             9 => Self::Integer1(0),
-            10 | 11 => Self::Internal,
+            10 => Self::Internal10,
+            11 => Self::Internal11,
             x if x % 2 == 0 => Self::Blob((x - 12) / 2),
             x => Self::String((x - 13) / 2),
         })
     }
 
+    pub fn to_varint(&self) -> VarInt {
+        match self {
+            Self::Null(_) => VarInt::new(0),
+            Self::Int8(_) => VarInt::new(1),
+            Self::Int16(_) => VarInt::new(2),
+            Self::Int24(_) => VarInt::new(3),
+            Self::Int32(_) => VarInt::new(4),
+            Self::Int48(_) => VarInt::new(5),
+            Self::Int64(_) => VarInt::new(6),
+            Self::Float(_) => VarInt::new(7),
+            Self::Integer0(_) => VarInt::new(8),
+            Self::Integer1(_) => VarInt::new(9),
+            Self::Internal10 => VarInt::new(10),
+            Self::Internal11 => VarInt::new(11),
+            Self::Blob(s) => VarInt::new((s * 2 + 12) as i64),
+            Self::String(s) => VarInt::new((s * 2 + 13) as i64),
+        }
+    }
+
     pub fn get_size(&self) -> Option<usize> {
         match self {
-            Self::Internal => None,
+            Self::Internal10 | Self::Internal11 => None,
             Self::Null(s)
             | Self::Int8(s)
             | Self::Int16(s)
@@ -130,7 +177,8 @@ impl Value {
             )),
             DataType::Integer0(_) => Self::Integer0,
             DataType::Integer1(_) => Self::Integer1,
-            DataType::Internal => Self::Internal(value.into()),
+            DataType::Internal10 => Self::Internal(value.into()),
+            DataType::Internal11 => Self::Internal(value.into()),
             DataType::Blob(_) => Self::Blob(value.into()),
             DataType::String(_) => Self::String(String::from_utf8_lossy(value).into()),
         }
@@ -148,6 +196,25 @@ impl Value {
             Self::Integer1 => Some(1),
             _ => None,
         };
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let output: Vec<u8> = match self {
+            Self::Null => vec![],
+            Self::Int8(v) => vec![*v as u8],
+            Self::Int16(v) => vec![*v as u8],
+            Self::Int24(v) => vec![*v as u8],
+            Self::Int32(v) => vec![*v as u8],
+            Self::Int48(v) => vec![*v as u8],
+            Self::Int64(v) => vec![*v as u8],
+            Self::Float(v) => vec![*v as u8],
+            Self::Integer0 => vec![],
+            Self::Integer1 => vec![],
+            Self::Internal(v) => v.clone(),
+            Self::Blob(v) => v.clone(),
+            Self::String(v) => v.clone().into_bytes(),
+        };
+        return output;
     }
 }
 
@@ -448,7 +515,7 @@ mod tests {
     fn varint_1byte() {
         // only first byte is important -- high order bit not set
         let bytes = vec![0x01, 0x25, 0x37, 0xf2, 0xaa, 0x51, 0x99, 0xe3, 0x1b];
-        let varint = VarInt::parse(&bytes);
+        let varint = VarInt::deserialize(&bytes);
         assert_eq!(varint.0 .0, 1);
         assert_eq!(varint.1, 1);
     }
@@ -457,7 +524,7 @@ mod tests {
     fn varint_2bytes() {
         // only first two bytes are important
         let bytes = vec![0x81, 0x25, 0x37, 0xf2, 0xaa, 0x51, 0x99, 0xe3, 0x1b];
-        let varint = VarInt::parse(&bytes);
+        let varint = VarInt::deserialize(&bytes);
         assert_eq!(varint.0 .0, 0x80 + 0x25);
         assert_eq!(varint.1, 2);
     }
@@ -466,7 +533,7 @@ mod tests {
     fn varint_3bytes() {
         // only first three bytes are important
         let bytes = vec![0x81, 0xa5, 0x37, 0xf2, 0xaa, 0x51, 0x99, 0xe3, 0x1b];
-        let varint = VarInt::parse(&bytes);
+        let varint = VarInt::deserialize(&bytes);
         assert_eq!(varint.0 .0, 0x4000 + 0x1280 + 0x37);
         assert_eq!(varint.1, 3);
     }
@@ -475,7 +542,7 @@ mod tests {
     fn varint_4bytes() {
         // only first four bytes are important
         let bytes = vec![0x81, 0xa5, 0x97, 0x62, 0xaa, 0x51, 0x99, 0xe3, 0x1b];
-        let varint = VarInt::parse(&bytes);
+        let varint = VarInt::deserialize(&bytes);
         assert_eq!(varint.0 .0, 0x200000 + 0x94000 + 0xb80 + 0x62);
         assert_eq!(varint.1, 4);
     }
@@ -484,7 +551,7 @@ mod tests {
     fn varint_5bytes() {
         // only first five bytes are important
         let bytes = vec![0x81, 0xa5, 0x97, 0xf2, 0x3a, 0x51, 0x99, 0xe3, 0x1b];
-        let varint = VarInt::parse(&bytes);
+        let varint = VarInt::deserialize(&bytes);
         assert_eq!(
             varint.0 .0,
             0x10000000 + 0x4a00000 + 0x5c000 + 0x3900 + 0x3a
@@ -496,7 +563,7 @@ mod tests {
     fn varint_6bytes() {
         // only first six bytes are important
         let bytes = vec![0x81, 0xa5, 0x97, 0xf2, 0xaa, 0x51, 0x99, 0xe3, 0x1b];
-        let varint = VarInt::parse(&bytes);
+        let varint = VarInt::deserialize(&bytes);
         assert_eq!(
             varint.0 .0,
             0x800000000 + 0x250000000 + 0x2e00000 + 0x1c8000 + 0x1500 + 0x51
@@ -508,7 +575,7 @@ mod tests {
     fn varint_7bytes() {
         // only first seven bytes are important
         let bytes = vec![0x81, 0xa5, 0x97, 0xf2, 0xaa, 0x81, 0x69, 0xe3, 0x1b];
-        let varint = VarInt::parse(&bytes);
+        let varint = VarInt::deserialize(&bytes);
         assert_eq!(
             varint.0 .0,
             0x40000000000 + 0x12800000000 + 0x170000000 + 0xe400000 + 0xa8000 + 0x80 + 0x69
@@ -520,7 +587,7 @@ mod tests {
     fn varint_8bytes() {
         // only first eight bytes are important
         let bytes = vec![0x81, 0xa5, 0x97, 0xf2, 0xaa, 0x81, 0x99, 0x23, 0x1b];
-        let varint = VarInt::parse(&bytes);
+        let varint = VarInt::deserialize(&bytes);
         assert_eq!(
             varint.0 .0,
             0x2000000000000
@@ -538,7 +605,7 @@ mod tests {
     #[test]
     fn varint_9bytes() {
         let bytes = vec![0x81, 0xa5, 0x97, 0xf2, 0xaa, 0x81, 0x99, 0x83, 0x1b];
-        let varint = VarInt::parse(&bytes);
+        let varint = VarInt::deserialize(&bytes);
         assert_eq!(
             varint.0 .0,
             0x200000000000000
